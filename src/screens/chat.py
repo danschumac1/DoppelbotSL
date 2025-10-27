@@ -37,6 +37,11 @@ ADMIN_CLEAR_CODE = os.environ.get("CHAT_ADMIN_CODE", "")  # optional passphrase 
 @st.cache_resource(show_spinner=False)
 def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA busy_timeout=2000;")
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS messages (
@@ -52,12 +57,36 @@ def _get_conn() -> sqlite3.Connection:
         """
         CREATE TABLE IF NOT EXISTS rooms (
             room TEXT PRIMARY KEY,
-            created_ts REAL NOT NULL
+            created_ts REAL NOT NULL,
+            close_ts   REAL
         )
         """
     )
+
+    # If rooms existed without close_ts, add it
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(rooms)").fetchall()}
+    if "close_ts" not in cols:
+        conn.execute("ALTER TABLE rooms ADD COLUMN close_ts REAL")
+
+    # Helpful index for paging
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room, ts)")
+
+    # reset timers upon restart
+    conn.execute("UPDATE rooms SET close_ts = NULL")
+
+
     conn.commit()
+
+    _ensure_seed_data(conn)
+
     return conn
+
+def _ensure_seed_data(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO rooms (room, created_ts, close_ts) VALUES (?, ?, NULL)",
+        ("general", time.time()),
+    )
+    conn.commit()
 
 
 def _list_rooms(conn: sqlite3.Connection) -> List[str]:
@@ -103,6 +132,15 @@ def _clear_room(conn: sqlite3.Connection, room: str) -> None:
     conn.execute("DELETE FROM messages WHERE room=?", (room,))
     conn.commit()
 
+def _get_room_close_at(conn: sqlite3.Connection, room: str) -> Optional[float]:
+    row = conn.execute("SELECT close_ts FROM rooms WHERE room=?", (room,)).fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+def _set_room_close_at(conn: sqlite3.Connection, room: str, ts: Optional[float]) -> None:
+    _ensure_room(conn, room)  # idempotent
+    conn.execute("UPDATE rooms SET close_ts=? WHERE room=?", (ts, room))
+    conn.commit()
+
 
 # ----------------------------- UI helpers ----------------------------- #
 
@@ -144,6 +182,7 @@ def chat_main() -> None:
 
     # Page header (keep minimal; page config should be set by top-level app)
     st.header("💬 Chat")
+
 
     # Sidebar: identity & rooms
     with st.sidebar:
@@ -211,10 +250,29 @@ def chat_main() -> None:
                     st.success("Room cleared.")
                     st.rerun()
 
+
+
+
     # Main chat area
     room = st.session_state.room
     name = st.session_state.name.strip()
     st.write(f"**Room:** `{room}`")
+
+    # define timer state 
+    CHAT_TIMER_DURATION = int(os.getenv("CHAT_TIMER_DURATION", "60"))  # seconds
+
+    now = time.time()
+    close_at = _get_room_close_at(conn, room)
+
+    # If you want the timer to auto-start when absent, keep this:
+    if close_at is None:
+        _set_room_close_at(conn, room, now + CHAT_TIMER_DURATION)
+        close_at = _get_room_close_at(conn, room)
+
+    remaining = max(0, int((close_at - time.time()))) if close_at else None
+    timer_active = close_at is not None
+    timer_expired = timer_active and remaining <= 0
+
 
     # Pagination: load recent messages (default 100), with ability to load older
     msgs = _get_messages(
@@ -246,18 +304,48 @@ def chat_main() -> None:
         if st.button("Scroll to bottom", use_container_width=True):
             st.rerun()
 
-    # Chat input
-    if name:
-        user_text = st.chat_input(f"Message #{room} as {name}")
-        if user_text and user_text.strip():
-            _add_message(conn, room=room, author=name, text=user_text.strip())
-            # After sending, immediately re-query last messages so it appears without waiting for timer
-            st.session_state.last_loaded_before_ts = None
-            st.rerun()
-    else:
-        st.chat_input("Set your display name in the sidebar to chat.", disabled=True)
+    # --- Chat input with inline timer on the right ---
+    # Decide if input should be disabled
+    input_disabled_reason = None
+    if not name:
+        input_disabled_reason = "Set your display name in the sidebar to chat."
+    elif timer_expired:
+        input_disabled_reason = "Chat is closed."
+
+    col_input, col_timer = st.columns([8, 1])
+
+    with col_input:
+        if input_disabled_reason:
+            st.chat_input(input_disabled_reason, disabled=True)
+        else:
+            user_text = st.chat_input(f"Message #{room} as {name}")
+            if user_text and user_text.strip():
+                # Hard gate in case timer expired between render and send
+                close_at_now = _get_room_close_at(conn, room)
+                if close_at_now is not None and time.time() >= close_at_now:
+                    st.warning("⏰ Message not sent — the chat just closed.")
+                else:
+                    _add_message(conn, room=room, author=name, text=user_text.strip())
+                    st.session_state.last_loaded_before_ts = None
+                    st.rerun()
+
+    with col_timer:
+        if timer_active and not timer_expired:
+            mm, ss = divmod(remaining, 60)
+            st.markdown(
+                f"<div style='text-align:center; font-size:16px; margin-top:8px;'>"
+                f"⏳ <b>{mm:02d}:{ss:02d}</b></div>",
+                unsafe_allow_html=True
+            )
+        elif timer_expired:
+            st.markdown(
+                "<div style='text-align:center; font-size:16px; margin-top:8px; color:red;'>🔒</div>",
+                unsafe_allow_html=True
+            )
+
+
 
     # Live refresh loop (basic)
     if st.session_state.live_refresh:
-        time.sleep(2)
+        time.sleep(1)
         st.rerun()
