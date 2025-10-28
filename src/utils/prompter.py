@@ -14,75 +14,73 @@ import time
 from pydantic import BaseModel
 import yaml
 from dotenv import load_dotenv
-import torch
-torch.cuda.empty_cache()
-import re
+# import torch
+# torch.cuda.empty_cache()
+# import re
 from json_repair import repair_json
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
-from openai import OpenAIError
 
 
 import openai
-from transformers import (
-    AutoTokenizer, 
-    BitsAndBytesConfig, 
-    AutoModelForCausalLM, 
-    Gemma3ForConditionalGeneration, 
-    AutoProcessor,
-    # pipeline
-    )
+# from transformers import (
+#     AutoTokenizer, 
+#     BitsAndBytesConfig, 
+#     AutoModelForCausalLM, 
+#     Gemma3ForConditionalGeneration, 
+#     AutoProcessor,
+#     # pipeline
+#     )
 
-from utils.logging_utils import MasterLogger
 
 from typing import Optional
-from contextlib import suppress
+# from contextlib import suppress
 
-def _load_hf_or_adapter(
-    *,
-    base_model_id: str,
-    adapter_id: Optional[str],
-    device_map,
-    torch_dtype,
-    trust_remote_code: bool = False,
-    use_fast_tokenizer: Optional[bool] = None,
-    quantization_config=None,
-):
-    """
-    Load a full HF causal model from `base_model_id`.
-    If `adapter_id` is given, apply a PEFT adapter on top (and try merging).
-    Returns (model, tokenizer).
-    """
-    from transformers import AutoTokenizer, AutoModelForCausalLM
-    tok_kwargs = {}
-    if use_fast_tokenizer is not None:
-        tok_kwargs["use_fast"] = use_fast_tokenizer
-    if trust_remote_code:
-        tok_kwargs["trust_remote_code"] = True
+# def _load_hf_or_adapter(
+#     *,
+#     base_model_id: str,
+#     adapter_id: Optional[str],
+#     device_map,
+#     torch_dtype,
+#     trust_remote_code: bool = False,
+#     use_fast_tokenizer: Optional[bool] = None,
+#     quantization_config=None,
+# ):
+#     """
+#     Load a full HF causal model from `base_model_id`.
+#     If `adapter_id` is given, apply a PEFT adapter on top (and try merging).
+#     Returns (model, tokenizer).
+#     """
+#     from transformers import AutoTokenizer, AutoModelForCausalLM
+#     tok_kwargs = {}
+#     if use_fast_tokenizer is not None:
+#         tok_kwargs["use_fast"] = use_fast_tokenizer
+#     if trust_remote_code:
+#         tok_kwargs["trust_remote_code"] = True
 
-    tokenizer = AutoTokenizer.from_pretrained(base_model_id, **tok_kwargs)
-    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
-        tokenizer.pad_token = tokenizer.eos_token
+#     tokenizer = AutoTokenizer.from_pretrained(base_model_id, **tok_kwargs)
+#     if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+#         tokenizer.pad_token = tokenizer.eos_token
 
-    model_kwargs = {
-        "device_map": device_map,
-        "torch_dtype": torch_dtype,
-    }
-    if trust_remote_code:
-        model_kwargs["trust_remote_code"] = True
-    if quantization_config is not None:
-        model_kwargs["quantization_config"] = quantization_config
+#     model_kwargs = {
+#         "device_map": device_map,
+#         "torch_dtype": torch_dtype,
+#     }
+#     if trust_remote_code:
+#         model_kwargs["trust_remote_code"] = True
+#     if quantization_config is not None:
+#         model_kwargs["quantization_config"] = quantization_config
 
-    model = AutoModelForCausalLM.from_pretrained(base_model_id, **model_kwargs)
+#     model = AutoModelForCausalLM.from_pretrained(base_model_id, **model_kwargs)
 
-    if adapter_id:
-        # Apply LoRA adapter
-        from peft import PeftModel
-        model = PeftModel.from_pretrained(model, adapter_id)
-        # Optional merge (saves VRAM at inference; skip if it fails)
-        with suppress(Exception):
-            model = model.merge_and_unload()
+#     if adapter_id:
+#         # Apply LoRA adapter
+#         from peft import PeftModel
+#         model = PeftModel.from_pretrained(model, adapter_id)
+#         # Optional merge (saves VRAM at inference; skip if it fails)
+#         with suppress(Exception):
+#             model = model.merge_and_unload()
 
-    return model, tokenizer
+#     return model, tokenizer
     
 
 class QAs(BaseModel):
@@ -403,308 +401,308 @@ class OpenAIPrompter(Prompter):
         # Return single element or list
         return results[0] if n == 1 else results
 
-class HFPrompter(Prompter):
-    def __init__(
-        self,
-        llm_model: str,
-        model=None,
-        tokenizer=None,
-        max_new_tokens: int = 2000,
-        temperature: float = 0.1,
-        quantize: bool = False,
-        device_map: Union[int, List[int], dict, str] = 0,
-        torch_dtype=torch.float16,
-        # ⬇️ NEW: adapter support
-        base_model_id: Optional[str] = None,   # e.g., "Qwen/Qwen2.5-7B-Instruct"
-        adapter_id: Optional[str] = None,      # e.g., "Time-MQA/Qwen-2.5-7B"
-        trust_remote_code: Optional[bool] = None,  # Qwen often needs True
-        use_fast_tokenizer: Optional[bool] = None, # Llama typically True
-        merge_adapter: bool = True,            # keep for API symmetry; we merge in helper
-        **kwargs,
-    ):
-        super().__init__(llm_model=llm_model, temperature=temperature, **kwargs)
+# class HFPrompter(Prompter):
+#     def __init__(
+#         self,
+#         llm_model: str,
+#         model=None,
+#         tokenizer=None,
+#         max_new_tokens: int = 2000,
+#         temperature: float = 0.1,
+#         quantize: bool = False,
+#         device_map: Union[int, List[int], dict, str] = 0,
+#         torch_dtype=torch.float16,
+#         # ⬇️ NEW: adapter support
+#         base_model_id: Optional[str] = None,   # e.g., "Qwen/Qwen2.5-7B-Instruct"
+#         adapter_id: Optional[str] = None,      # e.g., "Time-MQA/Qwen-2.5-7B"
+#         trust_remote_code: Optional[bool] = None,  # Qwen often needs True
+#         use_fast_tokenizer: Optional[bool] = None, # Llama typically True
+#         merge_adapter: bool = True,            # keep for API symmetry; we merge in helper
+#         **kwargs,
+#     ):
+#         super().__init__(llm_model=llm_model, temperature=temperature, **kwargs)
 
-        self.max_new_tokens = max_new_tokens
-        self.first_print = True
+#         self.max_new_tokens = max_new_tokens
+#         self.first_print = True
 
-        # If a shared model/tokenizer is passed, honor it and bail early
-        if model is not None and tokenizer is not None:
-            self.model = model
-            self.tokenizer = tokenizer
-            if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-            return
+#         # If a shared model/tokenizer is passed, honor it and bail early
+#         if model is not None and tokenizer is not None:
+#             self.model = model
+#             self.tokenizer = tokenizer
+#             if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
+#                 self.tokenizer.pad_token = self.tokenizer.eos_token
+#             return
 
-        # Build common kwargs
-        model_device_map = device_map
+#         # Build common kwargs
+#         model_device_map = device_map
 
-        quantization_config = None
-        if quantize:
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=True,
-                bnb_4bit_compute_dtype=torch.float16
-            )
+#         quantization_config = None
+#         if quantize:
+#             quantization_config = BitsAndBytesConfig(
+#                 load_in_8bit=True,
+#                 bnb_4bit_compute_dtype=torch.float16
+#             )
 
-        # Decide loading path:
-        # - If adapter_id is provided, we must have a base_model_id to load first.
-        # - Else, treat llm_model as a full checkpoint and load normally.
-        if adapter_id is not None:
-            if not base_model_id:
-                # Allow llm_model to be base if user forgot to pass base_model_id
-                base_model_id = llm_model
-            model, tokenizer = _load_hf_or_adapter(
-                base_model_id=base_model_id,
-                adapter_id=adapter_id,
-                device_map=model_device_map,
-                torch_dtype=torch_dtype,
-                trust_remote_code=bool(trust_remote_code),
-                use_fast_tokenizer=use_fast_tokenizer,
-                quantization_config=quantization_config,
-            )
-            self.model, self.tokenizer = model, tokenizer
-        else:
-            # Regular full checkpoint
-            tok_kwargs = {}
-            if use_fast_tokenizer is not None:
-                tok_kwargs["use_fast"] = use_fast_tokenizer
-            if trust_remote_code:
-                tok_kwargs["trust_remote_code"] = True
+#         # Decide loading path:
+#         # - If adapter_id is provided, we must have a base_model_id to load first.
+#         # - Else, treat llm_model as a full checkpoint and load normally.
+#         if adapter_id is not None:
+#             if not base_model_id:
+#                 # Allow llm_model to be base if user forgot to pass base_model_id
+#                 base_model_id = llm_model
+#             model, tokenizer = _load_hf_or_adapter(
+#                 base_model_id=base_model_id,
+#                 adapter_id=adapter_id,
+#                 device_map=model_device_map,
+#                 torch_dtype=torch_dtype,
+#                 trust_remote_code=bool(trust_remote_code),
+#                 use_fast_tokenizer=use_fast_tokenizer,
+#                 quantization_config=quantization_config,
+#             )
+#             self.model, self.tokenizer = model, tokenizer
+#         else:
+#             # Regular full checkpoint
+#             tok_kwargs = {}
+#             if use_fast_tokenizer is not None:
+#                 tok_kwargs["use_fast"] = use_fast_tokenizer
+#             if trust_remote_code:
+#                 tok_kwargs["trust_remote_code"] = True
 
-            self.tokenizer = AutoTokenizer.from_pretrained(llm_model, **tok_kwargs)
-            if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
+#             self.tokenizer = AutoTokenizer.from_pretrained(llm_model, **tok_kwargs)
+#             if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
+#                 self.tokenizer.pad_token = self.tokenizer.eos_token
 
-            model_kwargs = {
-                "device_map": model_device_map,
-                "torch_dtype": torch_dtype,
-            }
-            if trust_remote_code:
-                model_kwargs["trust_remote_code"] = True
-            if quantization_config is not None:
-                model_kwargs["quantization_config"] = quantization_config
+#             model_kwargs = {
+#                 "device_map": model_device_map,
+#                 "torch_dtype": torch_dtype,
+#             }
+#             if trust_remote_code:
+#                 model_kwargs["trust_remote_code"] = True
+#             if quantization_config is not None:
+#                 model_kwargs["quantization_config"] = quantization_config
 
-            self.model = AutoModelForCausalLM.from_pretrained(llm_model, **model_kwargs)
+#             self.model = AutoModelForCausalLM.from_pretrained(llm_model, **model_kwargs)
 
 
-    def parse_output(self, llm_output) -> Union[str, dict]:
-        """Parses LLM output based on structured/unstructured mode"""
+#     def parse_output(self, llm_output) -> Union[str, dict]:
+#         """Parses LLM output based on structured/unstructured mode"""
         
-        content = llm_output.strip()
+#         content = llm_output.strip()
 
-        if not self.is_structured_output:
-            return content
+#         if not self.is_structured_output:
+#             return content
 
-        # Extract first JSON-like block
-        match = re.search(r"\{.*", content, re.DOTALL)
-        if not match:
-            raise ValueError(f"Could not find a JSON object in output:\n{content}")
+#         # Extract first JSON-like block
+#         match = re.search(r"\{.*", content, re.DOTALL)
+#         if not match:
+#             raise ValueError(f"Could not find a JSON object in output:\n{content}")
         
-        json_candidate = match.group(0)
+#         json_candidate = match.group(0)
 
-        try:
-            return repair_json(json_candidate, return_objects=True)
-        except Exception as e:
-            raise ValueError(f"Output could not be repaired to valid JSON:\n{json_candidate}\nError: {e}")
+#         try:
+#             return repair_json(json_candidate, return_objects=True)
+#         except Exception as e:
+#             raise ValueError(f"Output could not be repaired to valid JSON:\n{json_candidate}\nError: {e}")
 
 
 
-    def _build_messages(self, input_texts: Dict[str, str]) -> List[Dict[str, str]]:
-        messages = [{"role": "system", "content": self.system_prompt}]
-        for qa in self.examples:
-            messages.append({"role": "user", "content": f"{self.main_prompt_header}\n{qa.question}"})
-            messages.append({"role": "assistant", "content": qa.answer})
-        final_prompt = self.format_q_as_string(input_texts)
-        messages.append({"role": "user", "content": f"{self.main_prompt_header}\n{final_prompt}"})
+#     def _build_messages(self, input_texts: Dict[str, str]) -> List[Dict[str, str]]:
+#         messages = [{"role": "system", "content": self.system_prompt}]
+#         for qa in self.examples:
+#             messages.append({"role": "user", "content": f"{self.main_prompt_header}\n{qa.question}"})
+#             messages.append({"role": "assistant", "content": qa.answer})
+#         final_prompt = self.format_q_as_string(input_texts)
+#         messages.append({"role": "user", "content": f"{self.main_prompt_header}\n{final_prompt}"})
 
-        if self.show_prompt and self.first_print:
-            self.first_print = False
-            print("=" * 50)
-            print("=" * 17, "EXAMPLE PROMPT", "=" * 17)
-            print(json.dumps(messages, indent=4))
-            print("=" * 50)
+#         if self.show_prompt and self.first_print:
+#             self.first_print = False
+#             print("=" * 50)
+#             print("=" * 17, "EXAMPLE PROMPT", "=" * 17)
+#             print(json.dumps(messages, indent=4))
+#             print("=" * 50)
 
-        return messages
+#         return messages
 
-    def get_completion(
-            self, 
-            input_texts: Union[Dict[str, str],List[Dict[str, str]]], 
-            parse=True
-            ) -> Union[dict, List[dict], str]:
-        if isinstance(input_texts, dict):
-            input_texts = [input_texts]
+#     def get_completion(
+#             self, 
+#             input_texts: Union[Dict[str, str],List[Dict[str, str]]], 
+#             parse=True
+#             ) -> Union[dict, List[dict], str]:
+#         if isinstance(input_texts, dict):
+#             input_texts = [input_texts]
 
-        messages_list = [self._build_messages(item) for item in input_texts]
+#         messages_list = [self._build_messages(item) for item in input_texts]
 
-        prompts = [
-            self.tokenizer.apply_chat_template(m, add_generation_prompt=True, tokenize=False)
-            for m in messages_list
-        ]
-        inputs = self.tokenizer(
-            prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-        )
+#         prompts = [
+#             self.tokenizer.apply_chat_template(m, add_generation_prompt=True, tokenize=False)
+#             for m in messages_list
+#         ]
+#         inputs = self.tokenizer(
+#             prompts,
+#             return_tensors="pt",
+#             padding=True,
+#             truncation=True,
+#         )
 
-        input_ids = inputs["input_ids"].to(self.model.device)
-        attention_mask = inputs["attention_mask"].to(self.model.device)
+#         input_ids = inputs["input_ids"].to(self.model.device)
+#         attention_mask = inputs["attention_mask"].to(self.model.device)
 
-        outputs = self.model.generate(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_new_tokens=self.max_new_tokens,
-            repetition_penalty=self.repetition_penalty,
-            return_dict_in_generate=True,
-            pad_token_id=self.tokenizer.eos_token_id,
-        )
+#         outputs = self.model.generate(
+#             input_ids=input_ids,
+#             attention_mask=attention_mask,
+#             max_new_tokens=self.max_new_tokens,
+#             repetition_penalty=self.repetition_penalty,
+#             return_dict_in_generate=True,
+#             pad_token_id=self.tokenizer.eos_token_id,
+#         )
 
-        generated_sequences = outputs.sequences
-        results = []
-        for i in range(len(generated_sequences)):
-            input_len = (input_ids[i] != self.tokenizer.pad_token_id).sum().item()
-            gen_tokens = generated_sequences[i][input_len:]
-            decoded = self.tokenizer.decode(gen_tokens, skip_special_tokens=True)
-            results.append(self.parse_output(decoded) if parse else decoded)
+#         generated_sequences = outputs.sequences
+#         results = []
+#         for i in range(len(generated_sequences)):
+#             input_len = (input_ids[i] != self.tokenizer.pad_token_id).sum().item()
+#             gen_tokens = generated_sequences[i][input_len:]
+#             decoded = self.tokenizer.decode(gen_tokens, skip_special_tokens=True)
+#             results.append(self.parse_output(decoded) if parse else decoded)
 
-        return results[0] if len(results) == 1 else results
+#         return results[0] if len(results) == 1 else results
 
-class GemmaPrompter(Prompter):
-    def __init__(
-        self,
-        llm_model: str = "google/gemma-3-12b-it",
-        model=None,
-        processor=None,
-        max_new_tokens: int = 2000,
-        temperature: float = 0.1,
-        device_map: Union[int, List[int], dict, str] = 0,
-        torch_dtype=torch.bfloat16,
-        **kwargs,
-    ):
-        super().__init__(llm_model=llm_model, temperature=temperature, **kwargs)
+# class GemmaPrompter(Prompter):
+#     def __init__(
+#         self,
+#         llm_model: str = "google/gemma-3-12b-it",
+#         model=None,
+#         processor=None,
+#         max_new_tokens: int = 2000,
+#         temperature: float = 0.1,
+#         device_map: Union[int, List[int], dict, str] = 0,
+#         torch_dtype=torch.bfloat16,
+#         **kwargs,
+#     ):
+#         super().__init__(llm_model=llm_model, temperature=temperature, **kwargs)
 
-        self.max_new_tokens = max_new_tokens
-        self.temperature = temperature
+#         self.max_new_tokens = max_new_tokens
+#         self.temperature = temperature
 
-        # SDP settings
-        torch.backends.cuda.enable_mem_efficient_sdp(False)
-        torch.backends.cuda.enable_flash_sdp(False)
-        torch.backends.cuda.enable_math_sdp(True)
+#         # SDP settings
+#         torch.backends.cuda.enable_mem_efficient_sdp(False)
+#         torch.backends.cuda.enable_flash_sdp(False)
+#         torch.backends.cuda.enable_math_sdp(True)
 
-        # Use shared model if provided
-        if model is not None and processor is not None:
-            self.model = model
-            self.processor = processor
-        else:
-            self.processor = AutoProcessor.from_pretrained(llm_model, use_fast=True)
-            self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token  # ✅ Required
-            device_map = device_map
+#         # Use shared model if provided
+#         if model is not None and processor is not None:
+#             self.model = model
+#             self.processor = processor
+#         else:
+#             self.processor = AutoProcessor.from_pretrained(llm_model, use_fast=True)
+#             self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token  # ✅ Required
+#             device_map = device_map
 
-            self.model = Gemma3ForConditionalGeneration.from_pretrained(
-                llm_model,
-                device_map=device_map,
-                torch_dtype=torch_dtype,
-            )
+#             self.model = Gemma3ForConditionalGeneration.from_pretrained(
+#                 llm_model,
+#                 device_map=device_map,
+#                 torch_dtype=torch_dtype,
+#             )
 
-    def _build_messages(self, input_texts: Dict[str, str]) -> List[Dict[str, Union[str, List[Dict[str, str]]]]]:
-        messages = []
+#     def _build_messages(self, input_texts: Dict[str, str]) -> List[Dict[str, Union[str, List[Dict[str, str]]]]]:
+#         messages = []
 
-        # ✅ System message
-        messages.append({
-            "role": "system",
-            "content": [{"type": "text", "text": str(self.system_prompt)}]
-        })
+#         # ✅ System message
+#         messages.append({
+#             "role": "system",
+#             "content": [{"type": "text", "text": str(self.system_prompt)}]
+#         })
 
-        # ✅ Few-shot examples
-        for example in self.examples:
-            messages.append({
-                "role": "user",
-                "content": [{"type": "text", "text": str(example.question)}]
-            })
-            messages.append({
-                "role": "assistant",
-                "content": [{"type": "text", "text": str(example.answer)}]
-            })
+#         # ✅ Few-shot examples
+#         for example in self.examples:
+#             messages.append({
+#                 "role": "user",
+#                 "content": [{"type": "text", "text": str(example.question)}]
+#             })
+#             messages.append({
+#                 "role": "assistant",
+#                 "content": [{"type": "text", "text": str(example.answer)}]
+#             })
 
-        # ✅ Actual question
-        user_input = self.format_q_as_string(input_texts)
-        messages.append({
-            "role": "user",
-            "content": [{"type": "text", "text": str(user_input)}]
-        })
+#         # ✅ Actual question
+#         user_input = self.format_q_as_string(input_texts)
+#         messages.append({
+#             "role": "user",
+#             "content": [{"type": "text", "text": str(user_input)}]
+#         })
 
-        return messages
+#         return messages
 
-    def parse_output(self, generated_text: str) -> Union[str, dict]:
-        cleaned = generated_text.strip().split("<|file_separator|>")[0].strip()
+#     def parse_output(self, generated_text: str) -> Union[str, dict]:
+#         cleaned = generated_text.strip().split("<|file_separator|>")[0].strip()
 
-        if not self.is_structured_output:
-            return cleaned
+#         if not self.is_structured_output:
+#             return cleaned
 
-        match = re.search(r"\{.*", cleaned, re.DOTALL)
-        if not match:
-            raise ValueError(f"Could not find a JSON object in output:\n{cleaned}")
+#         match = re.search(r"\{.*", cleaned, re.DOTALL)
+#         if not match:
+#             raise ValueError(f"Could not find a JSON object in output:\n{cleaned}")
 
-        json_candidate = match.group(0)
-        try:
-            return repair_json(json_candidate, return_objects=True)
-        except Exception as e:
-            raise ValueError(f"Output could not be repaired to valid JSON:\n{json_candidate}\nError: {e}")
+#         json_candidate = match.group(0)
+#         try:
+#             return repair_json(json_candidate, return_objects=True)
+#         except Exception as e:
+#             raise ValueError(f"Output could not be repaired to valid JSON:\n{json_candidate}\nError: {e}")
 
-    def get_completion(
-        self,
-        input_texts: Union[Dict[str, str], List[Dict[str, str]]],
-        parse: bool = True
-    ) -> Union[dict, List[dict], str]:
-        if isinstance(input_texts, dict):
-            input_texts = [input_texts]
+#     def get_completion(
+#         self,
+#         input_texts: Union[Dict[str, str], List[Dict[str, str]]],
+#         parse: bool = True
+#     ) -> Union[dict, List[dict], str]:
+#         if isinstance(input_texts, dict):
+#             input_texts = [input_texts]
 
-        # Step 1: Build prompts from messages
-        all_messages = [self._build_messages(entry) for entry in input_texts]
+#         # Step 1: Build prompts from messages
+#         all_messages = [self._build_messages(entry) for entry in input_texts]
 
-        raw_prompts = []
-        for i, messages in enumerate(all_messages):
-            prompt = self.processor.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
-                tokenize=False
-            )
-            if not isinstance(prompt, str):
-                raise ValueError(f"apply_chat_template returned invalid prompt at index {i}")
-            raw_prompts.append(prompt)
+#         raw_prompts = []
+#         for i, messages in enumerate(all_messages):
+#             prompt = self.processor.apply_chat_template(
+#                 messages,
+#                 add_generation_prompt=True,
+#                 tokenize=False
+#             )
+#             if not isinstance(prompt, str):
+#                 raise ValueError(f"apply_chat_template returned invalid prompt at index {i}")
+#             raw_prompts.append(prompt)
 
-        # Step 2: Tokenize batch
-        self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token  # ✅ Ensure padding works
-        tokenized = self.processor(
-            text=raw_prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=8192 
-        ).to(self.model.device, dtype=self.model.dtype)
+#         # Step 2: Tokenize batch
+#         self.processor.tokenizer.pad_token = self.processor.tokenizer.eos_token  # ✅ Ensure padding works
+#         tokenized = self.processor(
+#             text=raw_prompts,
+#             return_tensors="pt",
+#             padding=True,
+#             truncation=True,
+#             max_length=8192 
+#         ).to(self.model.device, dtype=self.model.dtype)
 
-        input_ids = tokenized["input_ids"]
-        attention_mask = tokenized["attention_mask"]
-        input_lengths = (input_ids != self.processor.tokenizer.pad_token_id).sum(dim=1)
+#         input_ids = tokenized["input_ids"]
+#         attention_mask = tokenized["attention_mask"]
+#         input_lengths = (input_ids != self.processor.tokenizer.pad_token_id).sum(dim=1)
 
-        # Step 3: Generate
-        with torch.inference_mode():
-            outputs = self.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=self.max_new_tokens,
-                do_sample=True,
-                temperature=self.temperature,
-                top_p=0.95,
-                top_k=50,
-                pad_token_id=self.processor.tokenizer.pad_token_id,
-            )
+#         # Step 3: Generate
+#         with torch.inference_mode():
+#             outputs = self.model.generate(
+#                 input_ids=input_ids,
+#                 attention_mask=attention_mask,
+#                 max_new_tokens=self.max_new_tokens,
+#                 do_sample=True,
+#                 temperature=self.temperature,
+#                 top_p=0.95,
+#                 top_k=50,
+#                 pad_token_id=self.processor.tokenizer.pad_token_id,
+#             )
 
-        # Step 4: Decode + parse
-        results = []
-        for i in range(outputs.shape[0]):
-            generated_tokens = outputs[i][input_lengths[i]:]
-            decoded = self.processor.decode(generated_tokens, skip_special_tokens=True)
-            parsed = self.parse_output(decoded) if parse else decoded
-            results.append(parsed)
+#         # Step 4: Decode + parse
+#         results = []
+#         for i in range(outputs.shape[0]):
+#             generated_tokens = outputs[i][input_lengths[i]:]
+#             decoded = self.processor.decode(generated_tokens, skip_special_tokens=True)
+#             parsed = self.parse_output(decoded) if parse else decoded
+#             results.append(parsed)
 
-        return results[0] if len(results) == 1 else results
+#         return results[0] if len(results) == 1 else results

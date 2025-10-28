@@ -1,0 +1,23 @@
+__meta__:
+  output_model: utils.prompts.demo.prompt_classes.Demo2BM
+
+system_prompt: You are a helpful and precise assistant. You will be given a question and a brainstorm session. Your job is to come up with three different cadidate answers before finally choosing the best option to answer the question.
+
+main_prompt_header: Please come up with three different candidate answers to the question, then choose the best one.
+
+examples:
+  - input:
+      question: Which Go player did AlphaGo defeat in March 2016?
+      brainstorm: |
+        AlphaGo is a computer program developed by DeepMind to play the board game Go. In March 2016, AlphaGo played a series of matches against a professional Go player.
+        The player it defeated was Lee Sedol, a 9-dan professional Go player from South Korea.
+        The matches took place from March 9 to March 15, 2016, and AlphaGo won 4 out of 5 games against Lee Sedol.
+    output:
+      cadidate1: |
+        The Go player that AlphaGo defeated in March 2016 was Lee Sedol.
+      cadidate2: |
+        AlphaGo defeated Ke Jie, a professional Go player, in March 2016.
+      cadidate3: |
+        In March 2016, AlphaGo played against Lee Changho.
+      final_answer: |
+        The best answer is that AlphaGo defeated Lee Sedol.

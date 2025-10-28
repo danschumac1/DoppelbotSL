@@ -5,24 +5,17 @@ import streamlit as st
 from utils.enums import Screen
 from utils.states import GameState, PlayerState
 
-# If your project exposes these types, import them
-# from utils.types import GameState, PlayerState
-# from utils.enums import Screen as ScreenEnum
-# from utils.logging import MasterLogger
-
-# Optional import: your AI bot
-# try:
-#     from utils.chatbot.ai_v5 import AIPlayer  # type: ignore
-#     _AI_AVAILABLE = True
-# except Exception:
-#     _AI_AVAILABLE = False
-
 # ---- Replace these with your own pools if desired ----
 CODE_NAMES: List[str] = [
-    "Falcon", "Nebula", "Quasar", "Echo", "Raven", "Orchid", "Zephyr", "Ember",
+    "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot",
+    "Golf", "Hotel", "India", "Juliett", "Kilo", "Lima",
+    "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo",
+    "Sierra", "Tango", "Uniform", "Victor", "Whiskey",
+    "X-ray", "Yankee", "Zulu"
 ]
+
 COLORS: List[str] = [
-    "Crimson", "Sapphire", "Emerald", "Amber", "Violet", "Teal", "Indigo", "Silver",
+    "Red", "Blue", "Green", "Yellow", "Purple", "Orange",
 ]
 # ------------------------------------------------------
 
@@ -38,51 +31,71 @@ def _next(pool_key: str, items: List[str]) -> str:
 
 def _init_state():
     st.session_state.setdefault("players", [])  # list[PlayerState]
-    # Expect the router to have created st.session_state.gs / ps / screen,
-    # but don't crash if not:
     st.session_state.setdefault("gs", None)
     st.session_state.setdefault("ps", None)
 
 
 def setup_main() -> None:
-    """Render the setup screen and mutate st.session_state in-place."""
     _init_state()
 
     gs = st.session_state.gs
     ps = st.session_state.ps
 
-    st.title("Player Setup")
-    st.caption("Quick profile to join the lobby. No files, no waiting — jump straight to chat.")
+    # Pull any previously-entered messages from PlayerState (if they exist)
+    existing_msgs: List[str] = list(getattr(ps, "copied_text_msgs", []) or [])
 
+    st.title("Player Setup")
+    st.caption("Paste at least three texts; add more if you like.")
+
+    # --- Message count controls OUTSIDE the form so UI can re-render immediately ---
+    st.session_state.setdefault("msg_count", max(3, len(existing_msgs) or 0))
+
+    # Let user pick a count (3–20). Putting this OUTSIDE the form makes it live-update fields.
+    st.session_state.msg_count = st.number_input(
+        "How many texts do you want to paste?",
+        min_value=3, max_value=20, step=1,
+        value=int(st.session_state.msg_count),
+        key="msg_count_selector",
+    )
+
+    # --- The form for name/initial + the dynamic message inputs ---
     with st.form("player_setup", clear_on_submit=False, border=True):
         col1, col2 = st.columns(2)
+
         with col1:
-            lobby = st.number_input(
-                "Lobby #",
-                min_value=1, max_value=10000,
-                value=int(getattr(ps, "lobby_id", 1) or 1),
-                step=1,
-                help="Used locally to rotate icebreakers; not persisted."
-            )
-            # want_ai = st.toggle(
-            #     "Add my AI doppelgänger",
-            #     value=True,
-            # )
+            first = st.text_input(
+                "First name",
+                value=getattr(ps, "first_name", "")
+            ).strip()
+
+            last_initial = st.text_input(
+                "Last initial (A–Z)",
+                max_chars=1,
+                value=getattr(ps, "last_initial", "")
+            ).upper().strip()
+
         with col2:
-            first = st.text_input("First name", value=getattr(ps, "first_name", "")).strip()
-            last_initial = st.text_input("Last initial (A–Z)", max_chars=1,
-                                         value=getattr(ps, "last_initial", "")).upper().strip()
+            # Render exactly msg_count inputs, prefilled from existing / previous widget state
+            input_msgs: List[str] = []
+            for i in range(int(st.session_state.msg_count)):
+                default_val = existing_msgs[i] if i < len(existing_msgs) else ""
+                msg = st.text_input(
+                    f"Text message #{i+1}",
+                    value=default_val,
+                    key=f"text_msg_{i+1}"
+                ).strip()
+                input_msgs.append(msg)
 
         submitted = st.form_submit_button("Join chat ▶", type="primary")
 
     if not submitted:
-        # Optional: small roster preview (current process only)
         with st.expander("Current players in this app session"):
             if not st.session_state.players:
                 st.caption("No one yet — submit the form to join.")
             else:
                 for p in st.session_state.players:
-                    st.markdown(f"- **{p.first_name} {p.last_initial}.** as `{p.code_name}` · {p.color_name}")
+                    count = len(getattr(p, "copied_text_msgs", []) or [])
+                    st.markdown(f"- **{p.first_name} {p.last_initial}.** as `{p.code_name}` · {p.color_name} · {count} texts")
         return
 
     # ---- Validation ----
@@ -91,39 +104,36 @@ def setup_main() -> None:
         problems.append("First name is required.")
     if not (len(last_initial) == 1 and last_initial.isalpha()):
         problems.append("Last initial must be a single letter (A–Z).")
+
+    cleaned_msgs = [m for m in input_msgs if m]
+    if len(cleaned_msgs) < 3:
+        problems.append("Please paste at least three non-empty text messages.")
+
     if problems:
         for p in problems:
             st.error(p)
         return
 
-    # ---- Assign identity (round-robin, no files) ----
+    # ---- Assign identity ----
     code_name = _next("code", CODE_NAMES)
     color = _next("color", COLORS)
 
-    # ---- Build PlayerState ----
+    # ---- Build PlayerState (now with copied_text_msgs) ----
     ps = PlayerState(
-        lobby_id=int(lobby),
         first_name=first,
         last_initial=last_initial,
         code_name=code_name,
+        copied_text_msgs=cleaned_msgs,
         is_human=True,
         color_name=color,
     )
     st.session_state.ps = ps
-
-    # Roster (local to this server process)
     st.session_state.players.append(ps)
 
-    # Optionally attach AI buddy
-
-    # ---- Minimal GameState mutation; keep it resilient ----
     if st.session_state.gs is None:
         st.session_state.gs = GameState()
     gs = st.session_state.gs
-
-    n = int(getattr(gs, "number_of_human_players", 1) or 1)
-    gs.number_of_human_players = max(n, 1)
-
+    gs.number_of_human_players = max(int(getattr(gs, "number_of_human_players", 1) or 1), 1)
     if not getattr(gs, "icebreakers", None):
         gs.icebreakers = [
             "What’s a hobby you picked up recently?",
@@ -132,7 +142,5 @@ def setup_main() -> None:
         ]
 
     st.success(f"Welcome, {ps.first_name} ({ps.code_name}, {ps.color_name})! Heading to chat…")
-
-    # Route to CHAT by mutating session state only
     st.session_state.current_screen = "CHAT"
     st.rerun()

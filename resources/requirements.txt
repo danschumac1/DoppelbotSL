@@ -1,2 +1,6 @@
 streamlit
 openai==1.58.1
+json_repair
+pydantic
+dotenv
+PyYAML

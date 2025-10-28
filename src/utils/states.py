@@ -5,10 +5,11 @@ from typing import List, Optional
 
 @dataclass
 class PlayerState:
-    lobby_id: str
+    # lobby_id: str
     first_name: str
     last_initial: str
     code_name: str
+    copied_text_msgs: List[str]
     is_human: bool 
     color_name: str     
     starttime: str = "" # Start time of the game

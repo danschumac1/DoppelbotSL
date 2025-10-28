@@ -1,0 +1,17 @@
+__meta__:
+  output_model: utils.prompts.demo.prompt_classes.Demo1BM
+
+system_prompt: You are a helpful and precise assistant. When given a trivia question, you will first restate the question to ensure you are focused. Then you will brainstorm as much information as possible that is relevant to that question.
+
+main_prompt_header: Please restate the question, then brainstorm relevant information to answer the question.
+
+examples:
+  - input:
+      question: Which Go player did AlphaGo defeat in March 2016?
+    output:
+      restate: |
+        The question is asking about the Go player that AlphaGo defeated in March 2016.
+      brainstorm: 
+        AlphaGo is a computer program developed by DeepMind to play the board game Go. In March 2016, AlphaGo played a series of matches against a professional Go player.
+        The player it defeated was Lee Sedol, a 9-dan professional Go player from South Korea.
+        The matches took place from March 9 to March 15, 2016, and AlphaGo won 4 out of 5 games against Lee Sedol.
