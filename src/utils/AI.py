@@ -19,7 +19,11 @@ class AIPlayer:
     def __init__(self, persona:dict, debug_bool:int=0) -> None:
         self.persona = persona
         self.debug_bool = debug_bool
-        self.doppels_messages: list = persona.get("text_samples")
+        base = persona.get("text_samples", "")
+        if isinstance(base, str):
+            self.doppels_messages = [s for s in base.splitlines() if s.strip()]
+        else:
+            self.doppels_messages = list(base or [])
 
         self.prompter_dict: Dict[str, Prompter] = {
         "decide_to_respond": OpenAIPrompter(
@@ -118,7 +122,7 @@ class AIPlayer:
         response = prompter.get_completion({
             "feedback": FEEDBACK,
             "persona": self.persona, 
-            "minutes": "\n".join(minutes),
+            "minutes":minutes,
             "reasoning": reasoning
             })
         response = self._extract_between_delimiters(response, '```')
@@ -135,21 +139,19 @@ class AIPlayer:
             })
         return response
     
-    def full_chain_response(self, minutes:str, lst_of_human_msgs:list) -> str:
-        '''blah'''
+    def full_chain_response(self, minutes:str) -> str:
         dtr = self.decide_to_respond(minutes)
         if self.debug_bool:
             print(f"[AIPlayer] full_chain_response DTR: {dtr}")
-        if dtr['decision'] =='RESPOND':
-            generic_response = self.respond(dtr['reasoning'], minutes)
+        if dtr.get('decision') == 'RESPOND':
+            generic = self.respond(dtr['reasoning'], minutes)
             if self.debug_bool:
-                print(f"[AIPlayer] full_chain_response generic_response: {generic_response}")
-            stylized_response = self.stylize_message(lst_of_human_msgs, generic_response)
+                print(f"[AIPlayer] generic_response: {generic}")
+            styled = self.stylize_message(generic)
             if self.debug_bool:
-                print(f"[AIPlayer] full_chain_response stylized_response: {stylized_response}")
-            return stylized_response
-        else:
-            return ""
+                print(f"[AIPlayer] stylized_response: {styled}")
+            return styled
+        return ""
 
 
 ####################################################################################################
@@ -169,5 +171,6 @@ if __name__ == "__main__":
         "TBH I MISS MY MOM"
     ]
     ai_paul.add_doppel_messages(lst_of_human_paul_msgs)
-    response = ai_paul.full_chain_response(minutes, lst_of_human_paul_msgs)
+    print(ai_paul.doppels_messages)
+    # response = ai_paul.full_chain_response(minutes)
 ####################################################################################################

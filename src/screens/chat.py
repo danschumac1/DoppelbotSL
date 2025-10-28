@@ -170,9 +170,80 @@ def _init_chat_state():
     st.session_state.setdefault("name", default_name)
     st.session_state.setdefault("room", default_room)
     st.session_state.setdefault("live_refresh", True)
-    st.session_state.setdefault("last_loaded_before_ts", None)  # for pagination
+    st.session_state.setdefault("last_loaded_before_ts", None)
+    st.session_state.setdefault("_ai_state", {})  # {(room, code_name): {"last_reply_ts": float}}
+    st.session_state.setdefault("_room_last_seen_msg_id", {})  # {room: int}
+    st.session_state.setdefault("_ai_inflight", {})           # {room: bool}
+    st.session_state.setdefault("_room_last_seen_msg_id", {}) # {room: int}
 
 
+def _last_msg_author(msgs):
+    if not msgs:
+        return None
+    return msgs[-1][2]  # author
+
+def _find_player_by_author_name(author: str):
+    """Match chat 'author' to PlayerState (we post humans as code_name)."""
+    players = st.session_state.get("players", [])
+    for p in players:
+        if getattr(p, "code_name", None) == author:
+            return p
+    return None
+
+
+def _build_minutes_text(msgs: List[Tuple[int, str, str, str, float]], max_lines: int = 40) -> str:
+    # msgs is newest-last; we’ll take last max_lines and format "Author: text"
+    tail = msgs[-max_lines:] if len(msgs) > max_lines else msgs
+    lines = [f"{author}: {text}" for (_id, _room, author, text, _ts) in tail]
+    return "\n".join(lines)
+
+def _ai_tick(conn: sqlite3.Connection, room: str, msgs: List[Tuple[int, str, str, str, float]]) -> None:
+    # --- lock: skip if already busy for this room ---
+    inflight = st.session_state._ai_inflight.get(room, False)
+    if inflight:
+        return
+    st.session_state._ai_inflight[room] = True
+    try:
+        players = st.session_state.get("players", [])
+        if not players or not msgs:
+            return
+
+        last_id, _room, last_author, last_text, last_ts = msgs[-1]
+        if last_author.endswith(" (AI)"):
+            return  # no AI→AI loops
+
+        minutes_text = _build_minutes_text(msgs, max_lines=60)
+        COOLDOWN = int(os.getenv("CHAT_AI_COOLDOWN", "4"))
+
+        for ps in players:
+            ai = getattr(ps, "ai_doppleganger", None)
+            if not ai:
+                continue
+
+            key = (room, ps.code_name)
+            state = st.session_state._ai_state.setdefault(key, {"last_reply_ts": 0.0})
+
+            ai_author = f"{ps.code_name} (AI)"
+            if last_author == ai_author:
+                continue
+            if time.time() - state["last_reply_ts"] < COOLDOWN:
+                continue
+
+            # Generate (LLM call)
+            try:
+                reply = ai.full_chain_response(minutes_text)
+            except Exception:
+                reply = ""
+
+            if reply and reply.strip():
+                # Re-check newest author to avoid races
+                fresh = _get_messages(conn, room=room, limit=1, before_ts=None)
+                current_last_author = fresh[-1][2] if fresh else last_author
+                if current_last_author != ai_author:
+                    _add_message(conn, room, ai_author, reply.strip())
+                    state["last_reply_ts"] = time.time()
+    finally:
+        st.session_state._ai_inflight[room] = False
 # ----------------------------- Screen entry ----------------------------- #
 
 def chat_main() -> None:
@@ -275,12 +346,18 @@ def chat_main() -> None:
 
 
     # Pagination: load recent messages (default 100), with ability to load older
-    msgs = _get_messages(
-        conn,
-        room=room,
-        limit=100,
-        before_ts=st.session_state.last_loaded_before_ts
-    )
+    msgs = _get_messages(conn, room=room, limit=100, before_ts=st.session_state.last_loaded_before_ts)
+
+    last_author = _last_msg_author(msgs)
+
+    input_disabled_reason = None
+    if not name:
+        input_disabled_reason = "Set your display name in the sidebar to chat."
+    elif timer_expired:
+        input_disabled_reason = "Chat is closed."
+    elif last_author == name:
+        input_disabled_reason = "Wait your turn — no back-to-back messages."
+
 
     # Display messages using chat UI
     chat_container = st.container(height=520, border=True)
@@ -292,6 +369,15 @@ def chat_main() -> None:
                 with st.chat_message("user", avatar="👤"):
                     st.markdown(f"**{author}**  ·  {_ts_to_str(ts)}")
                     st.write(text)
+
+    if msgs:
+        last_id = msgs[-1][0]
+        last_seen_map = st.session_state._room_last_seen_msg_id
+        last_seen = last_seen_map.get(room, 0)
+        if last_id > last_seen:
+            _ai_tick(conn, room, msgs)                         # guarded + fast if busy
+            st.session_state._room_last_seen_msg_id[room] = last_id
+
 
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -320,12 +406,22 @@ def chat_main() -> None:
         else:
             user_text = st.chat_input(f"Message #{room} as {name}")
             if user_text and user_text.strip():
-                # Hard gate in case timer expired between render and send
                 close_at_now = _get_room_close_at(conn, room)
                 if close_at_now is not None and time.time() >= close_at_now:
                     st.warning("⏰ Message not sent — the chat just closed.")
                 else:
+                    # 1) Save message
                     _add_message(conn, room=room, author=name, text=user_text.strip())
+
+                    # 2) Feed this line to the human's AI style memory (if present)
+                    p = _find_player_by_author_name(name)
+                    if p and getattr(p, "ai_doppleganger", None):
+                        try:
+                            p.ai_doppleganger.add_doppel_messages(user_text.strip())
+                        except Exception:
+                            pass
+
+                    # 3) Reset paging & mark for AI tick
                     st.session_state.last_loaded_before_ts = None
                     st.rerun()
 
@@ -346,6 +442,6 @@ def chat_main() -> None:
 
 
     # Live refresh loop (basic)
-    if st.session_state.live_refresh:
+    if st.session_state.live_refresh and not st.session_state._ai_inflight.get(room, False):
         time.sleep(1)
         st.rerun()

@@ -49,9 +49,7 @@ def _render_section(i: int):
             st.markdown(f"- {b}")
 
 def rules_main():
-    # init state
     st.session_state.setdefault("intro_idx", 0)
-    st.session_state.setdefault("screen", Screen.RULES)
 
     i = st.session_state.intro_idx
     st.markdown("---")
@@ -70,10 +68,10 @@ def rules_main():
                 st.rerun()
             else:
                 st.session_state.intro_idx = 0
-                st.session_state.screen = "SETUP"
+                st.session_state.current_screen = "SETUP"   # <— use the SAME key
                 st.rerun()
     with c3:
         if st.button("Skip to Setup", use_container_width=True):
             st.session_state.intro_idx = 0
-            st.session_state.screen = "SETUP"
+            st.session_state.current_screen = "SETUP"       # <— same here
             st.rerun()
