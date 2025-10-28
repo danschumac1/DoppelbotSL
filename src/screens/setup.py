@@ -4,6 +4,7 @@ import streamlit as st
 
 from utils.enums import Screen
 from utils.states import GameState, PlayerState
+from utils.AI import AIPlayer
 
 # ---- Replace these with your own pools if desired ----
 CODE_NAMES: List[str] = [
@@ -59,7 +60,7 @@ def setup_main() -> None:
     )
 
     # --- The form for name/initial + the dynamic message inputs ---
-    with st.form("player_setup", clear_on_submit=False, border=True):
+    with st.form("player_setup", clear_on_submit=False):
         col1, col2 = st.columns(2)
 
         with col1:
@@ -118,7 +119,6 @@ def setup_main() -> None:
     code_name = _next("code", CODE_NAMES)
     color = _next("color", COLORS)
 
-    # ---- Build PlayerState (now with copied_text_msgs) ----
     ps = PlayerState(
         first_name=first,
         last_initial=last_initial,
@@ -127,6 +127,9 @@ def setup_main() -> None:
         is_human=True,
         color_name=color,
     )
+
+    ai_player = AIPlayer(persona=ps.to_persona())
+    ps.ai_doppleganger = ai_player
     st.session_state.ps = ps
     st.session_state.players.append(ps)
 

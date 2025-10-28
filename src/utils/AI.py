@@ -7,7 +7,7 @@ How to run (For debugging):
 ####################################################################################################
 import sys; sys.path.append('./src/')  # to allow relative imports when running this file directly
 import re
-from typing import Dict #, Tuple
+from typing import Dict, List, Union #, Tuple
 from utils.prompter import Prompter, OpenAIPrompter
 # from utils.states import PlayerState
 from utils.constants import (
@@ -19,6 +19,7 @@ class AIPlayer:
     def __init__(self, persona:dict, debug_bool:int=0) -> None:
         self.persona = persona
         self.debug_bool = debug_bool
+        self.doppels_messages: list = persona.get("text_samples")
 
         self.prompter_dict: Dict[str, Prompter] = {
         "decide_to_respond": OpenAIPrompter(
@@ -72,6 +73,12 @@ class AIPlayer:
         match = re.search(pattern, text, re.DOTALL)  # DOTALL handles multi-line blocks if needed
         return match.group(1).strip() if match else f"ERROR NO MATCH FOUND ||| DELIM = {delim} ||| TEXT = {text}"
 
+    def add_doppel_messages(self, messages:Union[List[str], str]) -> None:
+        '''blah'''
+        if isinstance(messages, str):
+            self.doppels_messages.append(messages)
+        else:
+            self.doppels_messages.extend(messages)
         
     def decide_to_respond(self, minutes:str) -> Dict[str, str]:
         '''blah'''
@@ -86,8 +93,6 @@ class AIPlayer:
         decision = self._extract_between_delimiters(response, '```')
         reasoning = self._extract_between_delimiters(response, '***')
 
-        if self.debug_bool:
-            print(f"[AIPlayer] decide_to_respond response: {response}")
         
         # IF WE HAVE A VALID RESPONSE, RETURN IT 
         if "ERROR NO MATCH FOUND" not in decision and "ERROR NO MATCH FOUND" not in reasoning:
@@ -120,21 +125,42 @@ class AIPlayer:
         return response
     
 
-    def stylize_message(self, lst_of_human_msgs:list, message_to_stylize:str) -> str:
+
+    def stylize_message(self,  message_to_stylize:str) -> str:
         '''blah'''
         prompter = self.prompter_dict["stylizer"]
         response = prompter.get_completion({
-            "player_minutes": "\n".join(lst_of_human_msgs),
+            "player_minutes": self.doppels_messages,
             "message": message_to_stylize
             })
         return response
+    
+    def full_chain_response(self, minutes:str, lst_of_human_msgs:list) -> str:
+        '''blah'''
+        dtr = self.decide_to_respond(minutes)
+        if self.debug_bool:
+            print(f"[AIPlayer] full_chain_response DTR: {dtr}")
+        if dtr['decision'] =='RESPOND':
+            generic_response = self.respond(dtr['reasoning'], minutes)
+            if self.debug_bool:
+                print(f"[AIPlayer] full_chain_response generic_response: {generic_response}")
+            stylized_response = self.stylize_message(lst_of_human_msgs, generic_response)
+            if self.debug_bool:
+                print(f"[AIPlayer] full_chain_response stylized_response: {stylized_response}")
+            return stylized_response
+        else:
+            return ""
 
 
 ####################################################################################################
 if __name__ == "__main__":
     ai_paul = AIPlayer(
-        persona={"name": "Paul", "traits": "friendly, curious"}, 
-        debug_bool=0
+        persona={
+            "name": "Paul", 
+            "code_name": "EagleEye", 
+            "text_samples": "I talk every opertunity I can\nRad yo!\nThats dope\n6767"
+        }, 
+        debug_bool=1
         )
     minutes = "Alice: Hi there!\nBob: Hello!"
     lst_of_human_paul_msgs = [
@@ -142,11 +168,6 @@ if __name__ == "__main__":
         "LETS GET SWIGGGGYYY WITH IT",
         "TBH I MISS MY MOM"
     ]
-    dtr = ai_paul.decide_to_respond(minutes="Alice: Hi there!\nBob: Hello!")
-    print(dtr['decision'])
-    if dtr['decision'] =='RESPOND':
-        generic_response = ai_paul.respond(dtr['reasoning'], minutes)
-        print(f"GENERIC: {generic_response}")
-        stylized_response = ai_paul.stylize_message(lst_of_human_paul_msgs, generic_response)
-        print(f"STYLIZED: {stylized_response}")
+    ai_paul.add_doppel_messages(lst_of_human_paul_msgs)
+    response = ai_paul.full_chain_response(minutes, lst_of_human_paul_msgs)
 ####################################################################################################

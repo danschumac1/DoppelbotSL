@@ -16,7 +16,7 @@ class PlayerState:
     voted: bool = False # Flag to indicate if the player has voted
     still_in_game: bool = True # Flag to indicate if the player is still in the game
 
-    # ai_doppleganger: Optional[AIPlayer] = None # type: ignore
+    ai_doppleganger: Optional["AIPlayer"] = None # type: ignore
     # written_to_file: bool = False # Flag to indicate if the player has been written to a file
     # timekeeper: bool = False # Flag to indicate if the player is a timekeeper
 
@@ -25,6 +25,7 @@ class PlayerState:
             "first_name": self.first_name,
             "last_initial": self.last_initial,
             "code_name": self.code_name,
+            "text_samples": "\n".join(self.copied_text_msgs),
         }
 
 @dataclass
