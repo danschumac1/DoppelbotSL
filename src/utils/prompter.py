@@ -8,9 +8,10 @@ import base64
 import os
 import importlib
 import json
-from typing import List, Dict, Optional, Tuple, Type, Union
+from typing import List, Dict, Optional, Tuple, Type, Union, Any
 from abc import ABC, abstractmethod
 import time
+import warnings
 from pydantic import BaseModel
 import yaml
 from dotenv import load_dotenv
@@ -82,6 +83,28 @@ from typing import Optional
 
 #     return model, tokenizer
     
+def _read_yaml_utf8(path: str) -> Any:
+    """
+    Read YAML robustly on Windows:
+    1) utf-8 (strict)
+    2) utf-8-sig (handles BOM)
+    3) cp1252 with replacement (last resort, logs a warning)
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    except UnicodeDecodeError:
+        # Try BOM-utf8 next
+        try:
+            with open(path, "r", encoding="utf-8-sig") as f:
+                return yaml.safe_load(f)
+        except UnicodeDecodeError as e2:
+            warnings.warn(
+                f"UTF-8 decode failed for {path}: {e2}. "
+                "Falling back to cp1252 with replacement (you should resave as UTF-8)."
+            )
+            with open(path, "r", encoding="cp1252", errors="replace") as f:
+                return yaml.safe_load(f)
 
 class QAs(BaseModel):
     question: Dict[str, str]  # Multiple inputs as a dictionary
@@ -121,10 +144,16 @@ class Prompter(ABC):
     def __repr__(self) -> str:
         return f"Prompter(model={self.llm_model}, examples={len(self.examples)})"
 
-    def _load_yaml_examples_with_model(self) -> Tuple[Type[BaseModel], List[QAs], str, str, Dict[str, str], bool]:
-        with open(self.prompt_path, "r") as f:
-            raw = yaml.safe_load(f)
+    
 
+    def _load_yaml_examples_with_model(
+        self
+    ) -> Tuple[Type[object], List["QAs"], str, str, Dict[str, str], bool]:
+        if not self.prompt_path:
+            raise ValueError("prompt_path is None")
+        print("Loading prompt from:", self.prompt_path)
+        raw = _read_yaml_utf8(self.prompt_path)
+        
         meta = raw.get("__meta__", {})
         model_path = meta.get("output_model")
         if not model_path:
@@ -151,11 +180,12 @@ class Prompter(ABC):
         system_prompt = raw.get("system_prompt", "You are a helpful assistant.")
         main_prompt_header = raw.get("main_prompt_header", "")
         prompt_headers = raw.get("prompt_headers", {})
-        # print(raw.get("examples", []))
+
         examples = [
             QAs(
-                question=ex["input"], 
-                answer=model_class(**ex["output"]) if is_structured else ex["output"])
+                question=ex["input"],
+                answer=(model_class(**ex["output"]) if is_structured else ex["output"]),
+            )
             for ex in raw.get("examples", [])
         ]
 
