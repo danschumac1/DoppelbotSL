@@ -51,29 +51,36 @@ def _render_section(i: int):
 def rules_main():
     # init state
     st.session_state.setdefault("intro_idx", 0)
-    st.session_state.setdefault("screen", Screen.RULES)
 
     i = st.session_state.intro_idx
     st.markdown("---")
     _render_section(i)
 
-    st.write("")
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c1:
-        if st.button("◀ Prev", disabled=(i == 0), use_container_width=True):
-            st.session_state.intro_idx = max(0, i - 1)
+    # Put buttons in a placeholder so we can clear them before switching screens
+    controls = st.empty()
+    with controls.container():
+        c1, c2, c3 = st.columns([1, 1, 1])
+        prev_clicked = c1.button("◀ Prev", disabled=(i == 0), use_container_width=True, key="rules_prev")
+        next_clicked = c2.button("Next ▶", use_container_width=True, key="rules_next")
+        skip_clicked = c3.button("Skip to Setup", use_container_width=True, key="rules_skip")
+
+    if prev_clicked:
+        st.session_state.intro_idx = max(0, i - 1)
+        st.rerun()
+
+    if next_clicked:
+        if i < len(SECTIONS) - 1:
+            st.session_state.intro_idx = i + 1
             st.rerun()
-    with c2:
-        if st.button("Next ▶", use_container_width=True):
-            if i < len(SECTIONS) - 1:
-                st.session_state.intro_idx = i + 1
-                st.rerun()
-            else:
-                st.session_state.intro_idx = 0
-                st.session_state.screen = "SETUP"
-                st.rerun()
-    with c3:
-        if st.button("Skip to Setup", use_container_width=True):
+        else:
+            # final slide → go to SETUP
             st.session_state.intro_idx = 0
-            st.session_state.screen = "SETUP"
+            controls.empty()  # remove the buttons before switching
+            st.session_state.current_screen = Screen.LOBBY.name
             st.rerun()
+
+    if skip_clicked:
+        st.session_state.intro_idx = 0
+        controls.empty()      # remove the buttons before switching
+        st.session_state.current_screen = Screen.LOBBY.name
+        st.rerun()

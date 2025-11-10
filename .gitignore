@@ -1,4 +1,5 @@
 venv
 env
 
-*pycache*
+src/*/__pycache__/*
+*.pyc
