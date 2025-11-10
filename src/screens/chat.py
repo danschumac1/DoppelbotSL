@@ -20,6 +20,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import List, Tuple, Optional
+from uuid import uuid4
 
 import streamlit as st
 
@@ -32,6 +33,7 @@ except Exception:
 
 DB_PATH = os.environ.get("CHAT_DB_PATH", "chat.db")
 ADMIN_CLEAR_CODE = os.environ.get("CHAT_ADMIN_CODE", "")  # optional passphrase for clearing rooms
+default_number_of_players = 3 # temp for now before reading from input 
 
 # ----------------------------- DB helpers ----------------------------- #
 @st.cache_resource(show_spinner=False)
@@ -42,6 +44,7 @@ def _get_conn() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.execute("PRAGMA busy_timeout=2000;")
 
+    # for tracking messages 
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS messages (
@@ -53,15 +56,32 @@ def _get_conn() -> sqlite3.Connection:
         )
         """
     )
+
+    # for tracking different rooms 
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS rooms (
             room TEXT PRIMARY KEY,
             created_ts REAL NOT NULL,
-            close_ts   REAL
+            close_ts   REAL,
+            number_of_players INTEGER
         )
         """
     )
+
+    # for tracking room members for each room 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS room_members (
+            room TEXT NOT NULL,
+            member_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            joined_ts REAL NOT NULL,
+            PRIMARY KEY (room, member_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room)")
 
     # If rooms existed without close_ts, add it
     cols = {row[1] for row in conn.execute("PRAGMA table_info(rooms)").fetchall()}
@@ -71,8 +91,9 @@ def _get_conn() -> sqlite3.Connection:
     # Helpful index for paging
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room, ts)")
 
-    # reset timers upon restart
-    conn.execute("UPDATE rooms SET close_ts = NULL")
+    # reset lobbies upon restart
+    _reset_all_lobbies(conn)
+
 
 
     conn.commit()
@@ -81,10 +102,17 @@ def _get_conn() -> sqlite3.Connection:
 
     return conn
 
+
+def _reset_all_lobbies(conn: sqlite3.Connection) -> None:
+    conn.execute("DELETE FROM room_members")
+    conn.execute("UPDATE rooms SET close_ts = NULL")
+    conn.execute("DELETE FROM messages")  # optional: also clear chat logs
+    conn.commit()
+
 def _ensure_seed_data(conn: sqlite3.Connection) -> None:
     conn.execute(
-        "INSERT OR IGNORE INTO rooms (room, created_ts, close_ts) VALUES (?, ?, NULL)",
-        ("general", time.time()),
+        "INSERT OR IGNORE INTO rooms (room, created_ts, close_ts, number_of_players) VALUES (?, ?, NULL, ?)",
+        ("general", time.time(), default_number_of_players),
     )
     conn.commit()
 
@@ -98,7 +126,7 @@ def _ensure_room(conn: sqlite3.Connection, room: str) -> None:
     room = room.strip()
     if not room:
         return
-    conn.execute("INSERT OR IGNORE INTO rooms (room, created_ts) VALUES (?, ?)", (room, time.time()))
+    conn.execute("INSERT OR IGNORE INTO rooms (room, created_ts, number_of_players) VALUES (?, ?, ?)", (room, time.time(), default_number_of_players))
     conn.commit()
 
 
@@ -141,6 +169,37 @@ def _set_room_close_at(conn: sqlite3.Connection, room: str, ts: Optional[float])
     conn.execute("UPDATE rooms SET close_ts=? WHERE room=?", (ts, room))
     conn.commit()
 
+def _get_number_of_players(conn: sqlite3.Connection, room: str) -> Optional[int]:
+    row = conn.execute("SELECT number_of_players FROM rooms WHERE room=?", (room,)).fetchone()
+    return int(row[0]) if row and row[0] is not None else None
+
+def _set_number_of_players(conn: sqlite3.Connection, room: str, num_players: Optional[int]) -> None:
+    _ensure_room(conn, room)  # idempotent
+    conn.execute("UPDATE rooms SET number_of_players=? WHERE room=?", (num_players, room))
+    conn.commit()
+
+def _add_member(conn: sqlite3.Connection, room: str, member_id: str, name: str) -> None:
+    # Idempotent: one record per (room, member_id)
+    conn.execute(
+        "INSERT OR IGNORE INTO room_members (room, member_id, name, joined_ts) VALUES (?, ?, ?, ?)",
+        (room, member_id, name, time.time())
+    )
+    # If the same member changes display name later, keep it fresh (optional)
+    conn.execute(
+        "UPDATE room_members SET name=? WHERE room=? AND member_id=?",
+        (name, room, member_id)
+    )
+    conn.commit()
+
+def _member_count(conn: sqlite3.Connection, room: str) -> int:
+    cur = conn.execute("SELECT COUNT(*) FROM room_members WHERE room=?", (room,))
+    return int(cur.fetchone()[0] or 0)
+
+def _clear_members(conn: sqlite3.Connection, room: str) -> None:
+    conn.execute("DELETE FROM room_members WHERE room=?", (room,))
+    conn.commit()
+
+
 
 # ----------------------------- UI helpers ----------------------------- #
 
@@ -169,6 +228,7 @@ def _init_chat_state():
 
     st.session_state.setdefault("name", default_name)
     st.session_state.setdefault("room", default_room)
+    st.session_state.setdefault("number_of_players", default_number_of_players)
     st.session_state.setdefault("live_refresh", True)
     st.session_state.setdefault("last_loaded_before_ts", None)
     st.session_state.setdefault("_ai_state", {})  # {(room, code_name): {"last_reply_ts": float}}
@@ -244,6 +304,10 @@ def _ai_tick(conn: sqlite3.Connection, room: str, msgs: List[Tuple[int, str, str
                     state["last_reply_ts"] = time.time()
     finally:
         st.session_state._ai_inflight[room] = False
+    st.session_state.setdefault("last_loaded_before_ts", None)  # for pagination
+    st.session_state.setdefault("client_id", str(uuid4()))  # unique per browser tab/session
+
+
 # ----------------------------- Screen entry ----------------------------- #
 
 def chat_main() -> None:
@@ -263,7 +327,7 @@ def chat_main() -> None:
             st.info("Pick a display name to start chatting.")
 
         st.markdown("---")
-        st.subheader("Room")
+        st.subheader("Lobby")
 
         # Seed a default room if needed
         rooms = _list_rooms(conn)
@@ -284,20 +348,36 @@ def chat_main() -> None:
                 default_idx = rooms.index(st.session_state.room)
             except ValueError:
                 default_idx = 0
-            selected = st.selectbox("Join a room", rooms, index=default_idx)
+            selected = st.selectbox("Join a lobby", rooms, index=default_idx)
+      
         with col_b:
             if st.button("Join", use_container_width=True):
                 st.session_state.room = selected
                 st.session_state.last_loaded_before_ts = None
+                # record that a client has joined a room 
+                if st.session_state.name.strip():
+                    _add_member(conn, selected, st.session_state.client_id, st.session_state.name.strip())
                 st.rerun()
 
+
         # Create room
-        new_room = st.text_input("Create new room", placeholder="e.g., research-lab")
+        new_room = st.text_input("Create new lobby", placeholder="e.g., research-lab")
+        new_room_players = st.number_input("Number of players", min_value=2, max_value=100, value=default_number_of_players, step=1)
+
         if st.button("Create", use_container_width=True) and new_room.strip():
-            _ensure_room(conn, new_room.strip())
-            st.session_state.room = new_room.strip()
-            st.session_state.last_loaded_before_ts = None
+            room_name = new_room.strip()
+            _ensure_room(conn, room_name)
+            _set_number_of_players(conn, room_name, int(new_room_players))
+            # Add the current user as a member of the new room
+            if st.session_state.name.strip():
+                _add_member(conn, room_name, st.session_state.client_id, st.session_state.name.strip())
+            st.session_state["room"] = room_name
+            st.session_state["last_loaded_before_ts"] = None
+            st.session_state["number_of_players"] = int(new_room_players)
             st.rerun()
+
+
+
 
         st.markdown("---")
         st.subheader("Refresh")
@@ -327,22 +407,36 @@ def chat_main() -> None:
     # Main chat area
     room = st.session_state.room
     name = st.session_state.name.strip()
+
+    # Count unique members who have ever joined this room
+    num_players_required = _get_number_of_players(conn, room) or default_number_of_players
+    joined_count = _member_count(conn, room)
+
     st.write(f"**Room:** `{room}`")
+    st.caption(f"Joined: {joined_count}/{num_players_required}")
+
 
     # define timer state 
-    CHAT_TIMER_DURATION = int(os.getenv("CHAT_TIMER_DURATION", "60"))  # seconds
-
-    now = time.time()
+    CHAT_TIMER_DURATION = int(os.getenv("CHAT_TIMER_DURATION", "60"))
     close_at = _get_room_close_at(conn, room)
 
-    # If you want the timer to auto-start when absent, keep this:
-    if close_at is None:
-        _set_room_close_at(conn, room, now + CHAT_TIMER_DURATION)
+    if close_at is None and joined_count >= num_players_required:
+        _set_room_close_at(conn, room, time.time() + CHAT_TIMER_DURATION)
         close_at = _get_room_close_at(conn, room)
 
+    # Compute flags AFTER any possible start
     remaining = max(0, int((close_at - time.time()))) if close_at else None
     timer_active = close_at is not None
     timer_expired = timer_active and remaining <= 0
+
+    # Single source of truth for disabling input
+    input_disabled_reason = None
+    if not name:
+        input_disabled_reason = "Set your display name in the sidebar to chat."
+    elif close_at is None:
+        input_disabled_reason = f"Waiting for players to join… {joined_count}/{num_players_required}"
+    elif timer_expired:
+        input_disabled_reason = "Chat is closed."
 
 
     # Pagination: load recent messages (default 100), with ability to load older
@@ -391,12 +485,6 @@ def chat_main() -> None:
             st.rerun()
 
     # --- Chat input with inline timer on the right ---
-    # Decide if input should be disabled
-    input_disabled_reason = None
-    if not name:
-        input_disabled_reason = "Set your display name in the sidebar to chat."
-    elif timer_expired:
-        input_disabled_reason = "Chat is closed."
 
     col_input, col_timer = st.columns([8, 1])
 
