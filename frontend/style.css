@@ -1,0 +1,58 @@
+:root{
+      --bg:#0b1220; --panel:#121a2b; --panel-2:#0e1626; --text:#e6ecff; --text2:#0b1220; --muted:#9db0d6; --accent:#5bb5ff; --accent-2:#8f9cff; --danger:#ff6b6b; --ok:#41862c;
+      --radius:16px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{ margin:0; font-family:ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans";
+      color:var(--text); background:linear-gradient(180deg, #A7C7E7 0%, #FA5F55 100%); display:grid; place-items:center; }
+    .app{width:min(1100px, 100%); padding:24px}
+    header{display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px}
+    .brand{display:flex; align-items:center; gap:12px}
+    .logo{width:36px; height:36px; border-radius:12px; background:linear-gradient(135deg,var(--accent),var(--accent-2)); box-shadow:0 8px 30px rgba(91,181,255,.35)}
+    h1{font-size:20px; margin:0}
+    .pill{font-size:12px; color:var(--muted); padding:6px 10px; border-radius:999px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.08)}
+
+    .grid{display:grid; grid-template-columns: 300px 1fr; gap:16px}
+    @media (max-width:900px){ .grid{grid-template-columns:1fr} }
+ 
+    .card{background:linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%); border:1px solid rgba(255,255,255,.06); border-radius:var(--radius); box-shadow:0 10px 25px rgba(0,0,0,.35)}
+    .card .head{padding:14px 16px; border-bottom:1px solid rgba(255,255,255,.06); display:flex; align-items:center; justify-content:space-between}
+    .card .body{padding:16px}
+
+    .row{display:flex; gap:10px}
+    .col{display:flex; flex-direction:column; gap:8px}
+    label{font-size:12px; color:var(--muted)}
+    input,select,button,textarea{font:inherit}
+    input,select,textarea{ background:#0a1222; border:1px solid rgba(255,255,255,.08); color:var(--text); padding:10px 12px; border-radius:12px; outline:none; }
+    input:focus, select:focus, textarea:focus{border-color:var(--accent)}
+    .actions{display:flex; gap:8px; flex-wrap:wrap}
+    .btn{padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.08); background:#0c1527; color:var(--text); cursor:pointer}
+    .btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent-2)); border:none; color:#0a0f1c; font-weight:700}
+    .btn.ghost{background:transparent}
+
+    .chat-wrap{display:grid; grid-template-rows: auto 1fr auto; height:70vh;}
+    .chat-log{padding:16px; overflow:auto; display:flex; flex-direction:column; gap:10px}
+    .msg{display:grid; grid-template-columns:auto 1fr; gap:10px; align-items:start}
+    .avatar{width:36px; height:36px; border-radius:10px; background:#0a1222; display:grid; place-items:center; color:var(--muted); border:1px solid rgba(255,255,255,.08)}
+    .bubble{background:#0a1222; border:1px solid rgba(255,255,255,.08); padding:12px 14px; border-radius:12px}
+    .meta{font-size:12px; color:var(--muted); margin-bottom:4px}
+    .ai .bubble{background:rgba(91,181,255,.1); border-color:rgba(91,181,255,.3)}
+    .you .bubble{background:rgba(255,255,255,.04)}
+
+    .composer{display:flex; gap:10px; padding:12px; border-top:1px solid rgba(255,255,255,.06)}
+    .composer input{flex:1}
+
+    .status{font-size:12px; color:var(--text2)}
+    .dot{width:8px; height:8px; border-radius:999px; background:var(--ok); display:inline-block; margin-right:6px}
+    .dot.red{background:var(--danger)}
+    .monospace{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace}
+
+    .overlay{ position:fixed; inset:0; display:grid; place-items:center; background:rgba(7,10,18,.7); backdrop-filter: blur(6px);}
+    .modal{ width:min(720px, 96vw); border-radius:20px; overflow:hidden }
+    .modal .body{ display:grid; grid-template-columns: 1fr 260px; gap:16px }
+    @media (max-width:800px){ .modal .body{ grid-template-columns:1fr } }
+    .list{ max-height:50vh; overflow:auto; display:flex; flex-direction:column }
+    .room-item{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:12px 14px; border-bottom:1px solid rgba(255,255,255,.06) }
+    .room-id{ font-weight:700; letter-spacing:.5px }
+    .room-meta{ color:var(--muted); font-size:12px }

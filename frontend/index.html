@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DoppelBot Chat</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <div class="logo" aria-hidden="true"></div>
+        <h1>DoppelBot Chat</h1>
+        <span class="pill">frontend prototype</span>
+      </div>
+      <div class="status" id="status"><span class="dot red"></span> disconnected</div>
+    </header>
+
+    <div class="grid">
+      <section class="card">
+        <div class="head"><strong>Session</strong></div>
+        <div class="body col">
+          <div class="col">
+            <label for="mode">Mode</label>
+            <select id="mode">
+              <option value="mock" selected>Mock (no backend yet)</option>
+              <option value="ws">WebSocket (plug in later)</option>
+            </select>
+          </div>
+          <div class="actions">
+            <button class="btn" id="disconnect">Disconnect</button>
+            <button class="btn" id="clear">Clear Chat</button>
+          </div>
+          <div class="col">
+            <label>Notes</label>
+            <ul style="margin:0 0 0 18px; padding:0; color:var(--muted)">
+              <li>Use the <b>Room Select</b> overlay to pick or create a room.</li>
+              <li>Start in <em>Mock</em> mode; switch to <em>WebSocket</em> after backend.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="card chat-wrap">
+        <div class="head"><strong>Room <span id="roomLabel" class="monospace">—</span></strong>
+          <div class="actions"><button class="btn" id="openRoomSelect">Change Room</button></div>
+        </div>
+        <div id="log" class="chat-log" aria-live="polite"></div>
+        <div class="composer">
+          <input id="input" placeholder="Type a message… (Enter to send)" />
+          <button class="btn primary" id="send">Send</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay" role="dialog" aria-modal="true">
+    <section class="card modal">
+      <div class="head">
+        <strong>Select a room</strong>
+        <div class="actions">
+          <button class="btn" id="refreshRooms">Refresh</button>
+          <button class="btn ghost" id="closeOverlay">Close</button>
+        </div>
+      </div>
+      <div class="body">
+        <div>
+          <div id="roomList" class="list" role="list"></div>
+        </div>
+        <div class="col" style="padding-right:16px">
+          <label>Create new room</label>
+          <input id="newRoomId" class="monospace" placeholder="e.g., ABC123" />
+          <button class="btn primary" id="createRoom">Create & Join</button>
+          <hr style="border-color:rgba(255,255,255,.08)"/>
+          <label>Tips</label>
+          <ul style="margin:0 0 0 18px; padding:0; color:var(--muted)">
+            <li>This list is <b>mocked</b> until the backend is ready.</li>
+            <li>Later, replace with <code>fetch('/api/rooms')</code> and <code>POST /api/rooms</code>.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
