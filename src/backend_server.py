@@ -2,7 +2,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Dict, Set
+from contextlib import asynccontextmanager
 from collections import defaultdict
+from src.persistence import Sink
 import asyncio, time, os, json
 
 app = FastAPI(title="DoppelBot Backend")
@@ -11,6 +13,9 @@ app = FastAPI(title="DoppelBot Backend")
 rooms_users: Dict[str, Set[str]] = defaultdict(set)        # room_id -> {user_id}
 room_last_activity: Dict[str, float] = defaultdict(lambda: time.time())
 room_connections: Dict[str, Dict[str, WebSocket]] = defaultdict(dict)  # room_id -> user_id -> ws
+
+#instance
+sink = Sink()
 
 # --- Serve frontend/ at "/" ---
 FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
@@ -95,6 +100,17 @@ async def ws_room(websocket: WebSocket, room_id: str, user_id: str):
         rooms_users[room].discard(user)
         room_last_activity[room] = time.time()
         await broadcast(room, {"type": "system", "text": f"{user} left."})
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.sink = Sink()
+    print("Sink Started")
+
+    yield
+
+    #shutdown
+    app.state.sink.shutdown()
+    print("Sink stopped")
 
 async def broadcast(room: str, payload: dict):
     dead = []
