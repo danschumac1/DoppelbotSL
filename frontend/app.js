@@ -68,4 +68,79 @@ function send(){
   if(mode==='mock'||!ws){mockAiReply(val);} else if(ws&&ws.readyState===1){ws.send(JSON.stringify({type:'chat',text:val}));}
 }
 
+async function loadRooms() {
+  const list = document.getElementById('roomsList');
+  list.innerHTML = '';
+
+  //Loading State
+  const loading = document.getElementById('div');
+  loadRooms.className = 'room-item';
+  loading.innerHTML = '<div><div class="room-id monospace">Loading...</div></div>';
+  list.appendChild(loading);
+
+  try{
+    const res = await fetch('/api/rooms', { method: 'GET' });
+    if (!res.ok) throw new Error('GET /api/rooms failed: ${res.status}');
+
+    const rooms = await res.json(); //[{id,users, lastActivity},...]
+     list.innerHTML = '';
+
+     if(!Array.isArray(rooms) || rooms.length === 0){
+      const empty = document.createElement('div');
+      empty.className = 'room-item';
+      empty.innerHTML = `
+        <div>
+          <div class="room-id monospace">No rooms yet</div>
+          <div class="room-meta">Create one on the right</div>
+        </div>
+        `;
+        list.appendChild(empty);
+        return;
+    }
+
+    rooms.forEach(r => {
+      const id = String(r.id || '').toUpperCase();
+      const users = Number(r.users ?? 0);
+      const last = Number(r.lastActivity ?? 0);
+
+      const row = document.createElement('div');
+      row.className = 'room-item'
+      row.innerHTML = `
+        <div>
+          <div class = "room-id monospace">${escapeHtml(id)}</div>
+          <div> class="room-meta">${users} online • active ${formatAge(last)} ago</div>
+        </div>
+        <button class="btn primary" data-join="${escapeHtml(id)}">Join</button>
+        `;
+        list.appendChild(row);
+    })
+
+  } catch(err){
+    list.innerHTML = '';
+    const bad = document.createElement('div');
+    bad.className = 'room-item';
+    bad.innerHTML = `
+      <div>
+        <div> class="room-id monospace">Error loading rooms</div>
+        <div> class="room-meta">${escapeHtml(String(err.message || err))}</div>
+      </div>
+      <button class="btn" id="retryRooms">Retry</button>
+      `;
+    list.appendChild(bad);
+
+    document.getElementById('refreshRooms')?.addEventListener('click', loadRooms);
+    document.getElementById('openRoomsSelect').addEventListener('click', () => {
+      overlay.style.display = 'grid';
+      loadRooms();
+    });
+  } 
+}
+
+function formatAge(seconds) {
+  if(!isFinite(seconds) || seconds < 0) return '0s';
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h`;
+}
+
 overlay.style.display='grid'; loadRooms(); setStatus(false);
