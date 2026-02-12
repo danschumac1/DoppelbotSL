@@ -3,7 +3,10 @@ const logEl = $('#log');
 const statusEl = $('#status');
 const roomLabel = $('#roomLabel');
 const overlay = $('#overlay');
-let ws = null; let connected=false; let currentRoom = '';
+let ws = null; 
+let connected=false; 
+let currentRoom = '';
+let currentUser = '';
 
 function setStatus(ok){ connected=ok; statusEl.innerHTML = ok ? '<span class="dot"></span> connected' : '<span class="dot red"></span> disconnected'; }
 function appendMsg(kind, name, text){
@@ -17,23 +20,15 @@ function appendMsg(kind, name, text){
      </div>`;
   logEl.appendChild(wrap); logEl.scrollTop=logEl.scrollHeight;
 }
+
 function escapeHtml(s){return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c]));}
 
-const mockRooms = ()=>[
-  {id:'LOBBY',users:3,updated:'just now'},
-  {id:'ALPHA1',users:1,updated:'2m ago'},
-  {id:'BETA42',users:5,updated:'8m ago'}];
-
-async function loadRooms(){
-  const data=mockRooms(); const list=$('#roomList'); list.innerHTML='';
-  data.forEach(r=>{
-    const row=document.createElement('div'); row.className='room-item';
-    row.innerHTML=`<div><div class="room-id monospace">${r.id}</div><div class="room-meta">${r.users} online • ${r.updated}</div></div><button class="btn primary" data-join="${r.id}">Join</button>`;
-    list.appendChild(row);
-  });
+function joinRoom(id){
+  currentRoom=id;
+  roomLabel.textContent=id;
+  overlay.style.display='none';
+  setStatus(false);
 }
-
-function joinRoom(id){ currentRoom=id; roomLabel.textContent=id; overlay.style.display='none'; setStatus(true); }
 
 async function mockAiReply(userText){
   const delay=250+Math.random()*650; await new Promise(r=>setTimeout(r,delay));
@@ -51,8 +46,43 @@ $('#disconnect').addEventListener('click',()=>{
 $('#openRoomSelect').addEventListener('click',()=>{overlay.style.display='grid';loadRooms();});
 $('#closeOverlay').addEventListener('click',()=>{overlay.style.display='none';});
 $('#refreshRooms').addEventListener('click',loadRooms);
-$('#createRoom').addEventListener('click',()=>{let id=$('#newRoomId').value.trim().toUpperCase(); if(!id){id=Math.random().toString(36).slice(2,8).toUpperCase();} joinRoom(id);});
-document.addEventListener('click',e=>{const btn=e.target.closest('[data-join]'); if(btn){joinRoom(btn.getAttribute('data-join'));}});
+
+$('#hamburger').addEventListener('click', openSidebar);
+$('#closeSidebar').addEventListener('click', closeSidebar);
+$('#backdrop').addEventListener('click', closeSidebar);
+
+$('#navRules').addEventListener('click', () => { closeSidebar(); showScreen('screenRules'); });
+$('#navAbout').addEventListener('click', () => { closeSidebar(); showScreen('screenAbout'); });
+$('#navPlay').addEventListener('click', () => { closeSidebar(); goPlay(); });
+
+$('#btnPlayFromRules').addEventListener('click', goPlay);
+$('#btnOpenMenu').addEventListener('click', openSidebar);
+
+$('#createRoom').addEventListener('click', async () =>{
+  let id = $('#newRoomId').value.trim().toUpperCase();
+  if (!id) id = Math.random().toString(36).slice(2, 8).toUpperCase();
+
+  const res = await fetch('/api/rooms',{
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json'},
+    body: JSON.stringify({id})
+  });
+
+  if(!res.ok){
+    alert(`Failed to create room: ${res.status}`);
+    return;
+  }
+
+  await joinRoomFlow(id);
+});
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-join]');
+  if (!btn) return;
+  const roomId = btn.getAttribute('data-join');
+  await joinRoomFlow(roomId);
+});
+
 
 function send(){
   const val=$('#input').value.trim(); if(!val) return; $('#input').value='';
@@ -63,24 +93,28 @@ function send(){
       localStorage.setItem('tempName', temp);
       return temp;
     })();
-  appendMsg('you',name,val);
-  const mode=$('#mode').value;
-  if(mode==='mock'||!ws){mockAiReply(val);} else if(ws&&ws.readyState===1){ws.send(JSON.stringify({type:'chat',text:val}));}
+  if (!ws || ws.readyState !== 1) {
+  appendMsg('ai', 'System', 'Not connected. Join a room first.');
+  return;
+}
+
+ws.send(JSON.stringify({ type: 'chat', text: val }));
+
 }
 
 async function loadRooms() {
-  const list = document.getElementById('roomsList');
+  const list = document.getElementById('roomList');
   list.innerHTML = '';
 
   //Loading State
-  const loading = document.getElementById('div');
-  loadRooms.className = 'room-item';
+  const loading = document.createElement('div');
+  loading.className = 'room-item';
   loading.innerHTML = '<div><div class="room-id monospace">Loading...</div></div>';
   list.appendChild(loading);
 
   try{
     const res = await fetch('/api/rooms', { method: 'GET' });
-    if (!res.ok) throw new Error('GET /api/rooms failed: ${res.status}');
+    if (!res.ok) throw new Error(`GET /api/rooms failed: ${res.status}`);
 
     const rooms = await res.json(); //[{id,users, lastActivity},...]
      list.innerHTML = '';
@@ -108,12 +142,12 @@ async function loadRooms() {
       row.innerHTML = `
         <div>
           <div class = "room-id monospace">${escapeHtml(id)}</div>
-          <div> class="room-meta">${users} online • active ${formatAge(last)} ago</div>
+          <div class="room-meta">${users} online • active ${formatAge(last)} ago</div>
         </div>
         <button class="btn primary" data-join="${escapeHtml(id)}">Join</button>
         `;
         list.appendChild(row);
-    })
+    });
 
   } catch(err){
     list.innerHTML = '';
@@ -121,26 +155,125 @@ async function loadRooms() {
     bad.className = 'room-item';
     bad.innerHTML = `
       <div>
-        <div> class="room-id monospace">Error loading rooms</div>
-        <div> class="room-meta">${escapeHtml(String(err.message || err))}</div>
+        <div class="room-id monospace">Error loading rooms</div>
+        <div class="room-meta">${escapeHtml(String(err.message || err))}</div>
       </div>
       <button class="btn" id="retryRooms">Retry</button>
       `;
     list.appendChild(bad);
 
-    document.getElementById('refreshRooms')?.addEventListener('click', loadRooms);
-    document.getElementById('openRoomsSelect').addEventListener('click', () => {
-      overlay.style.display = 'grid';
-      loadRooms();
-    });
-  } 
-}
+    $('#retryRooms')?.addEventListener('click', loadRooms);
+    }
+  }
 
 function formatAge(seconds) {
   if(!isFinite(seconds) || seconds < 0) return '0s';
   if (seconds < 60) return `${Math.floor(seconds)}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   return `${Math.floor(seconds / 3600)}h`;
+}
+
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+// Sidebar open/close
+function openSidebar(){
+  $('#sidebar').classList.add('open');
+  $('#backdrop').classList.add('show');
+  $('#sidebar').setAttribute('aria-hidden', 'false');
+  $('#backdrop').setAttribute('aria-hidden', 'false');
+}
+function closeSidebar(){
+  $('#sidebar').classList.remove('open');
+  $('#backdrop').classList.remove('show');
+  $('#sidebar').setAttribute('aria-hidden', 'true');
+  $('#backdrop').setAttribute('aria-hidden', 'true');
+}
+
+// “Play Game” should open the room select overlay (your existing overlay)
+function goPlay(){
+  showScreen('screenApp');       // go to main app screen
+  overlay.style.display = 'grid'; // open room list overlay
+  loadRooms();                    // refresh rooms
+}
+
+async function joinRoomFlow(roomId) {
+  const room = String(roomId || '').trim().toUpperCase();
+  if (!room) return;
+
+  // Ask backend to join and assign unique userId
+  const res = await fetch(`/api/rooms/${encodeURIComponent(room)}/join`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: '' }) // backend will default to "Player"
+  });
+
+  if (!res.ok) {
+    alert(`Failed to join room: ${res.status}`);
+    return;
+  }
+
+  const data = await res.json();
+  currentRoom = data.roomId;
+  currentUser = data.userId;
+
+  // UI
+  roomLabel.textContent = currentRoom;
+  overlay.style.display = 'none';
+  logEl.innerHTML = '';
+
+  connectWebSocket(currentRoom, currentUser);
+}
+
+function wsUrl(path) {
+  // Works for localhost + Cloudflare Tunnel (https -> wss)
+  const proto = (location.protocol === 'https:') ? 'wss' : 'ws';
+  return `${proto}://${location.host}${path}`;
+}
+
+function connectWebSocket(room, user) {
+  // Close old WS if any
+  if (ws) { try { ws.close(); } catch {} ws = null; }
+
+  setStatus(false);
+  ws = new WebSocket(wsUrl(`/ws/${encodeURIComponent(room)}/${encodeURIComponent(user)}`));
+
+  ws.onopen = () => {
+    setStatus(true);
+    appendMsg('ai', 'System', `Connected as ${user}`);
+  };
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch { msg = { type: 'chat', user: '???', text: ev.data }; }
+
+    if (msg.type === 'history' && Array.isArray(msg.messages)) {
+      msg.messages.forEach(m => appendMsg(m.user === currentUser ? 'you' : 'ai', m.user, m.text));
+      return;
+    }
+
+    if (msg.type === 'chat') {
+      const kind = (msg.user === currentUser) ? 'you' : 'ai';
+      appendMsg(kind, msg.user, msg.text);
+      return;
+    }
+
+    if (msg.type === 'system') {
+      appendMsg('ai', 'System', msg.text || '');
+      return;
+    }
+  };
+
+  ws.onclose = () => {
+    setStatus(false);
+    appendMsg('ai', 'System', 'Disconnected.');
+  };
+
+  ws.onerror = () => {
+    setStatus(false);
+  };
 }
 
 overlay.style.display='grid'; loadRooms(); setStatus(false);
