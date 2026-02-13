@@ -2,9 +2,13 @@
 import json
 import os
 import time
+import uuid
+import random
+import asyncio
+from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 from contextlib import asynccontextmanager
-from typing import Dict, Set
+from typing import Dict, Set, Optional, List
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,17 +17,117 @@ from fastapi.staticfiles import StaticFiles
 from backend.persistence import Sink
 
 # ---------------------------
-# In-memory state (rooms/users/connections)
+# Game Constants
 # ---------------------------
-rooms_users: Dict[str, Set[str]] = defaultdict(set)                 # room_id -> set(user_id)
-room_last_activity: Dict[str, float] = defaultdict(lambda: time.time())
-room_connections: Dict[str, Dict[str, WebSocket]] = defaultdict(dict)  # room_id -> user_id -> websocket
+MIN_PLAYERS = 3
+MAX_PLAYERS = 5
+TOTAL_ROUNDS = 3
+VOTE_SECONDS = 200
+
+PHASE_LOBBY = "LOBBY"
+PHASE_CHAT  = "CHAT"
+PHASE_VOTE  = "VOTE"
+PHASE_SCORE = "SCORE"
+
+# ---------------------------
+# Helpers
+# ---------------------------
 
 def _norm_room(room_id: str) -> str:
     return (room_id or "").strip().upper()
 
-def _norm_user(user_id: str) -> str:
-    return (user_id or "").strip()
+def now_ts() -> int:
+    return int(time.time())
+
+
+# ---------------------------
+# Random username generator
+# ---------------------------
+_ADJ = [
+    "Orbit", "Pebble", "Crimson", "Velvet", "Neon", "Silver", "Lunar", "Echo",
+    "Mango", "Arctic", "Cinder", "Kite", "Nova", "Coral", "Quartz", "Aqua",
+]
+_NOUN = [
+    "Fox", "Comet", "Otter", "Wisp", "Raven", "Tiger", "Koala", "Falcon",
+    "Panda", "Lynx", "Cobra", "Finch", "Gecko", "Dolphin", "Badger", "Hawk",
+]
+
+def generate_username(taken: Set[str]) -> str:
+    # try a bunch of times before falling back
+    for _ in range(200):
+        name = f"{random.choice(_ADJ)}{random.choice(_NOUN)}"
+        if name not in taken:
+            return name
+    # fallback
+    i = 2
+    base = "Player"
+    name = base
+    while name in taken:
+        name = f"{base}{i}"
+        i += 1
+    return name
+
+# ---------------------------
+# In-memory state (rooms/users/connections)
+# ---------------------------
+room_last_activity: Dict[str, float] = defaultdict(lambda: time.time())
+room_connections: Dict[str, Dict[str, WebSocket]] = defaultdict(dict)  # room_id -> player_id -> websocket
+
+@dataclass
+class Player:
+    player_id: str
+    username: str
+    is_ai: bool = False           # SERVER ONLY (do not leak until game_over)
+    connected: bool = True
+    is_host: bool = False
+
+@dataclass
+class RoomState:
+    room_id: str
+    host_player_id: Optional[str] = None
+    phase: str = PHASE_LOBBY
+    round: int = 0  # 0 in lobby, then 1..3
+    players: Dict[str, Player] = field(default_factory=dict)  # player_id -> Player
+    vote_ends_at: Optional[int] = None
+    vote_task_id: int = 0
+
+    # votes_by_round[round][voter_id] = target_id
+    votes_by_round: Dict[int, Dict[str, str]] = field(default_factory=lambda: defaultdict(dict))
+
+    # ai_top_voted_by_round[round] = bool
+    ai_top_voted_by_round: Dict[int, bool] = field(default_factory=dict)
+
+    ai_player_id: Optional[str] = None
+
+rooms: Dict[str, RoomState] = {}
+
+def get_room(room_id: str) -> RoomState:
+    room_id = _norm_room(room_id)
+    if room_id not in rooms:
+        rooms[room_id] = RoomState(room_id=room_id)
+    return rooms[room_id]
+
+def room_public_snapshot(room: RoomState) -> dict:
+    # Snapshot safe for clients (no is_ai)
+    players = []
+    for p in room.players.values():
+        players.append({
+            "playerId": p.player_id,
+            "username": p.username,
+            "connected": p.connected,
+            "isHost": (p.player_id == room.host_player_id),
+        })
+    players.sort(key=lambda x: (not x["isHost"], x["username"]))
+    return {
+        "roomId": room.room_id,
+        "phase": room.phase,
+        "round": room.round,
+        "hostPlayerId": room.host_player_id,
+        "players": players,
+        "minPlayers": MIN_PLAYERS,
+        "maxPlayers": MAX_PLAYERS,
+        "totalRounds": TOTAL_ROUNDS,
+    }
 
 # ---------------------------
 # Lifespan (startup/shutdown)
@@ -38,10 +142,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DoppelBot Backend", lifespan=lifespan)
 
-# CORS (helps if you ever serve frontend separately or use tunnel domains)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # lock down later (your domain)
+    allow_origins=["*"],  # lock down later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -54,11 +157,13 @@ app.add_middleware(
 async def list_rooms():
     now = time.time()
     out = []
-    for rid, users in rooms_users.items():
+    for rid, room in rooms.items():
         out.append({
             "id": rid,
-            "users": len(users),
+            "users": len(room.players),
             "lastActivity": int(now - room_last_activity[rid]),
+            "phase": room.phase,
+            "round": room.round,
         })
     out.sort(key=lambda r: r["lastActivity"])
     return out
@@ -68,27 +173,80 @@ async def create_room(payload: dict):
     rid = _norm_room(payload.get("id"))
     if not rid:
         raise HTTPException(400, "Missing id")
-
-    rooms_users.setdefault(rid, set())
+    get_room(rid)
     room_last_activity[rid] = time.time()
     return {"id": rid}
 
 @app.post("/api/rooms/{room_id}/join")
 async def join_room(room_id: str, payload: dict):
-    room = _norm_room(room_id)
-    rooms_users.setdefault(room, set())
+    """
+    MVP: ignore user-provided name. Server assigns random username + UUID player_id.
+    """
+    room = get_room(room_id)
 
-    desired = (payload.get("name") or "").strip()
-    base = desired if desired else "Player"
-    name = base
-    n = 1
-    while name in rooms_users[room]:
-        n += 1
-        name = f"{base}{n}"
+    if len(room.players) >= MAX_PLAYERS:
+        raise HTTPException(400, f"Room full (max {MAX_PLAYERS}).")
 
-    rooms_users[room].add(name)
-    room_last_activity[room] = time.time()
-    return {"roomId": room, "userId": name, "displayName": name}
+    taken_names = {p.username for p in room.players.values()}
+    username = generate_username(taken_names)
+    player_id = str(uuid.uuid4())
+
+    is_first = (len(room.players) == 0)
+    p = Player(player_id=player_id, username=username, is_host=is_first)
+    room.players[player_id] = p
+
+    if is_first:
+        room.host_player_id = player_id
+        room.phase = PHASE_LOBBY
+        room.round = 0
+
+    room_last_activity[room.room_id] = time.time()
+
+    return {
+        "roomId": room.room_id,
+        "playerId": player_id,
+        "username": username,
+        "isHost": (player_id == room.host_player_id),
+        "snapshot": room_public_snapshot(room),
+    }
+
+@app.post("/api/rooms/{room_id}/start")
+async def start_game(room_id: str, payload: dict):
+    """
+    Host-only. Requires >=3 players. Picks AI randomly among players.
+    """
+    room = get_room(room_id)
+    caller = (payload.get("playerId") or "").strip()
+    if not caller:
+        raise HTTPException(400, "Missing playerId")
+
+    if caller != room.host_player_id:
+        raise HTTPException(403, "Only host can start the game.")
+
+    if len(room.players) < MIN_PLAYERS:
+        raise HTTPException(400, f"Need at least {MIN_PLAYERS} players to start.")
+
+    if room.phase != PHASE_LOBBY:
+        raise HTTPException(400, "Game already started.")
+
+    # Pick AI among current players
+    ai_player_id = random.choice(list(room.players.keys()))
+    room.ai_player_id = ai_player_id
+    for pid, p in room.players.items():
+        p.is_ai = (pid == ai_player_id)
+
+    room.round = 1
+    room.phase = PHASE_CHAT
+    room.votes_by_round.clear()
+    room.ai_top_voted_by_round.clear()
+
+    room_last_activity[room.room_id] = time.time()
+
+    # Broadcast start snapshot + phase
+    await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
+    await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
+
+    return {"ok": True, "snapshot": room_public_snapshot(room)}
 
 @app.get("/api/rooms/{room_id}/history")
 async def room_history(room_id: str, limit: int = 50):
@@ -97,26 +255,127 @@ async def room_history(room_id: str, limit: int = 50):
     return {"roomId": room, "messages": msgs}
 
 # ---------------------------
+# Game mechanics
+# ---------------------------
+def require_player(room: RoomState, player_id: str) -> Player:
+    if player_id not in room.players:
+        raise HTTPException(400, "Unknown playerId.")
+    return room.players[player_id]
+
+def compute_top_voted(votes: Dict[str, str]) -> Optional[str]:
+    """
+    votes: voter_id -> target_id
+    Returns top target_id, tie broken randomly.
+    """
+    if not votes:
+        return None
+    counts: Dict[str, int] = defaultdict(int)
+    for _voter, target in votes.items():
+        counts[target] += 1
+    maxv = max(counts.values())
+    tied = [tid for tid, c in counts.items() if c == maxv]
+    return random.choice(tied)
+
+def humans_win(room: RoomState) -> bool:
+    # Humans win if AI top-voted in >= 2 of 3 rounds
+    hits = sum(1 for r in range(1, TOTAL_ROUNDS + 1) if room.ai_top_voted_by_round.get(r))
+    return hits >= 2
+
+async def advance_from_vote(room: RoomState):
+    """
+    Called when a vote round completes. Computes round result, advances phase.
+    """
+    r = room.round
+    votes = room.votes_by_round[r]
+    top = compute_top_voted(votes)
+
+    ai_top = (top is not None and top == room.ai_player_id)
+    room.ai_top_voted_by_round[r] = ai_top
+
+    await broadcast(room.room_id, {
+        "type": "round_result",
+        "data": {
+            "round": r,
+            "topTargetPlayerId": top,
+            "aiWasTopVoted": ai_top,
+        }
+    })
+
+    # Advance
+    if r < TOTAL_ROUNDS:
+        room.round += 1
+        room.phase = PHASE_CHAT
+        await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
+        await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
+    else:
+        room.phase = PHASE_SCORE
+        winner = "HUMANS" if humans_win(room) else "AI"
+        ai_pid = room.ai_player_id
+        ai_name = room.players[ai_pid].username if ai_pid and ai_pid in room.players else None
+
+        await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
+        await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
+        await broadcast(room.room_id, {
+            "type": "game_over",
+            "data": {
+                "winner": winner,
+                "aiPlayerId": ai_pid,
+                "aiUsername": ai_name,
+                "aiTopVotedRounds": [r for r, v in room.ai_top_voted_by_round.items() if v],
+            }
+        })
+
+async def enter_vote_phase(room:RoomState):
+    room.phase = PHASE_VOTE
+    room.votes_by_round[room.round] = {}
+    room.vote_ends_at = now_ts() + VOTE_SECONDS
+    room.vote_task_id += 1
+    my_task_id = room.vote_task_id
+
+    await broadcast(room.room_id, {"type":"phase_changed","data":{"phase":room.phase,"round":room.round}})
+    await broadcast(room.room_id, {"type":"room_snapshot","data":room_public_snapshot(room) | {"voteEndsAt": room.vote_ends_at}})
+
+    async def timer():
+        await asyncio.sleep(VOTE_SECONDS)
+        # only resolve if still same vote phase + same timer instance
+        if room.phase == PHASE_VOTE and room.vote_task_id == my_task_id:
+            await advance_from_vote(room)
+    
+    asyncio.create_task(timer())
+
+
+
+# ---------------------------
 # WebSocket
 # ---------------------------
-@app.websocket("/ws/{room_id}/{user_id}")
-async def ws_room(websocket: WebSocket, room_id: str, user_id: str):
-    room = _norm_room(room_id)
-    user = _norm_user(user_id)
+@app.websocket("/ws/{room_id}/{player_id}")
+async def ws_room(websocket: WebSocket, room_id: str, player_id: str):
+    room = get_room(room_id)
+    pid = (player_id or "").strip()
+
+    # Ensure player exists
+    if pid not in room.players:
+        # client should call /join first
+        await websocket.accept()
+        await websocket.send_json({"type": "error", "text": "Unknown playerId. Call /join first."})
+        await websocket.close()
+        return
 
     await websocket.accept()
 
-    # register
-    room_connections[room][user] = websocket
-    rooms_users[room].add(user)
-    room_last_activity[room] = time.time()
+    # register connection
+    room_connections[room.room_id][pid] = websocket
+    room.players[pid].connected = True
+    room_last_activity[room.room_id] = time.time()
 
-    # Sends history upon connect
-    history = app.state.sink.recent_messages(room, limit=50)
-    await websocket.send_json({"type": "history", "room": room, "messages": history})
+    # Send snapshot + history
+    await websocket.send_json({"type": "room_snapshot", "data": room_public_snapshot(room)})
 
-    await broadcast(room, {"type": "system", "text": f"{user} joined."})
+    history = app.state.sink.recent_messages(room.room_id, limit=50)
+    await websocket.send_json({"type": "history", "room": room.room_id, "messages": history})
 
+    await broadcast(room.room_id, {"type": "system", "text": f"{room.players[pid].username} joined."})
+    await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
 
     try:
         while True:
@@ -124,29 +383,100 @@ async def ws_room(websocket: WebSocket, room_id: str, user_id: str):
             try:
                 msg = json.loads(raw)
             except Exception:
-                msg = {"type": "chat", "text": raw}
+                msg = {"type": "send_chat", "data": {"text": raw}}
 
-            t = msg.get("type", "chat")
+            t = msg.get("type")
 
-            if t == "chat":
-                text = (msg.get("text") or "").strip()
+            # -------------------------
+            # CHAT
+            # -------------------------
+            if t == "send_chat":
+                if room.phase != PHASE_CHAT:
+                    await websocket.send_json({"type": "error", "text": "Chat is not enabled right now."})
+                    continue
+
+                data = msg.get("data") or {}
+                text = (data.get("text") or "").strip()
                 if not text:
                     continue
 
-                ts = int(time.time())
-                room_last_activity[room] = time.time()
+                ts = now_ts()
+                room_last_activity[room.room_id] = time.time()
 
-                # persist
-                app.state.sink.emit_message(room, user, text, ts)
+                sender = room.players[pid]
+                # persist (store user_id as username for now to keep schema simple)
+                app.state.sink.emit_message(room.room_id, sender.username, text, ts)
 
-                # broadcast
-                await broadcast(room, {"type": "chat", "user": user, "text": text, "ts": ts})
+                # broadcast (server source of truth)
+                await broadcast(room.room_id, {
+                    "type": "chat_message",
+                    "data": {"playerId": pid, "user": sender.username, "text": text, "ts": ts}
+                })
+
+                # AI placeholder: anytime human msg -> print('AI LOGIC HERE')
+                # (If we later make the AI send messages, we'll check sender.is_ai)
+                if not sender.is_ai:
+                    print("AI LOGIC HERE")
+
+            # -------------------------
+            # VOTE
+            # -------------------------
+            elif t == "cast_vote":
+                if room.phase != PHASE_VOTE:
+                    await websocket.send_json({"type": "error", "text": "Not in vote phase."})
+                    continue
+
+                data = msg.get("data") or {}
+                target = (data.get("targetPlayerId") or "").strip()
+                if target not in room.players:
+                    await websocket.send_json({"type": "error", "text": "Invalid vote target."})
+                    continue
+
+                # record vote (allow overwrite for MVP)
+                room.votes_by_round[room.round][pid] = target
+                room_last_activity[room.room_id] = time.time()
+
+                submitted = len(room.votes_by_round[room.round])
+                total = len(room.players)  # MVP: all players vote, including AI player
+
+                await broadcast(room.room_id, {
+                    "type": "vote_progress",
+                    "data": {"round": room.round, "submitted": submitted, "total": total}
+                })
+
+                # If all have voted, resolve round
+                if submitted >= total:
+                    room.vote_ends_at = None
+                    room.vote_task_id += 1 #Cancels pending timers 
+                    await advance_from_vote(room)
+
+            # -------------------------
+            # PHASE CONTROL (host)
+            # -------------------------
+            elif t == "end_chat":
+                # Host can end chat early and move to vote
+                if pid != room.host_player_id:
+                    await websocket.send_json({"type": "error", "text": "Only host can end chat."})
+                    continue
+                if room.phase != PHASE_CHAT:
+                    await websocket.send_json({"type": "error", "text": "Not in chat phase."})
+                    continue
+
+                await enter_vote_phase(room)
+                room.votes_by_round[room.round] = {}  # reset votes for this round
+                await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
+                await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
+
+            elif t == "request_snapshot":
+                await websocket.send_json({"type": "room_snapshot", "data": room_public_snapshot(room)})
 
             elif t == "typing":
-                await broadcast(room, {"type": "typing", "user": user, "isTyping": bool(msg.get("isTyping"))})
-
-            elif t == "guess":
-                await broadcast(room, {"type": "guess", "user": user, "who": msg.get("who")})
+                # optional: keep it
+                data = msg.get("data") or {}
+                await broadcast(room.room_id, {
+                    "type": "typing",
+                    "data": {"playerId": pid, "user": room.players[pid].username, "isTyping": bool(data.get("isTyping"))}
+                })
 
             else:
                 await websocket.send_json({"type": "error", "text": f"unknown type: {t}"})
@@ -154,24 +484,33 @@ async def ws_room(websocket: WebSocket, room_id: str, user_id: str):
     except WebSocketDisconnect:
         pass
     finally:
-        room_connections[room].pop(user, None)
-        rooms_users[room].discard(user)
-        room_last_activity[room] = time.time()
-        await broadcast(room, {"type": "system", "text": f"{user} left."})
+        # unregister
+        room_connections[room.room_id].pop(pid, None)
+        if pid in room.players:
+            room.players[pid].connected = False
+        room_last_activity[room.room_id] = time.time()
 
-async def broadcast(room: str, payload: dict):
+        # broadcast leave + snapshot
+        if pid in room.players:
+            await broadcast(room.room_id, {"type": "system", "text": f"{room.players[pid].username} left."})
+            await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
+
+async def broadcast(room_id: str, payload: dict):
     dead = []
-    for u, ws in list(room_connections[room].items()):
+    for pid, ws in list(room_connections[room_id].items()):
         try:
             await ws.send_json(payload)
         except Exception:
-            dead.append(u)
-    for u in dead:
-        room_connections[room].pop(u, None)
-        rooms_users[room].discard(u)
+            dead.append(pid)
+    for pid in dead:
+        room_connections[room_id].pop(pid, None)
+        # don't remove the player from the room; mark disconnected only
+        room = rooms.get(room_id)
+        if room and pid in room.players:
+            room.players[pid].connected = False
 
 # ---------------------------
-# DEBUG LINES
+# DEBUG LINES (keep)
 # ---------------------------
 @app.get("/api/debug/db")
 async def db_debug():
@@ -184,8 +523,6 @@ async def debug_messages():
     rows = con.execute("SELECT * FROM messages ORDER BY id DESC LIMIT 20").fetchall()
     con.close()
     return rows
-
-
 
 # Serve frontend LAST
 FRONTEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
