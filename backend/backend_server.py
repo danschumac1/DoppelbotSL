@@ -9,6 +9,8 @@ from dataclasses import dataclass, field, asdict
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from typing import Dict, Set, Optional, List
+from backend.ai.shadows import ShadowAIManager
+
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,6 +25,7 @@ MIN_PLAYERS = 3
 MAX_PLAYERS = 5
 TOTAL_ROUNDS = 3
 VOTE_SECONDS = 200
+CHAT_SECONDS = 120
 
 PHASE_LOBBY = "LOBBY"
 PHASE_CHAT  = "CHAT"
@@ -80,6 +83,7 @@ class Player:
     is_ai: bool = False           # SERVER ONLY (do not leak until game_over)
     connected: bool = True
     is_host: bool = False
+    eliminated: bool = False
 
 @dataclass
 class RoomState:
@@ -99,6 +103,11 @@ class RoomState:
 
     ai_player_id: Optional[str] = None
 
+    chat_ends_at: Optional[int] = None
+    vote_ends_at: Optional[int] = None
+    
+    phase_task_id: int = 0
+
 rooms: Dict[str, RoomState] = {}
 
 def get_room(room_id: str) -> RoomState:
@@ -116,9 +125,10 @@ def room_public_snapshot(room: RoomState) -> dict:
             "username": p.username,
             "connected": p.connected,
             "isHost": (p.player_id == room.host_player_id),
+            "eliminated": p.eliminated
         })
     players.sort(key=lambda x: (not x["isHost"], x["username"]))
-    return {
+    snap = {
         "roomId": room.room_id,
         "phase": room.phase,
         "round": room.round,
@@ -128,6 +138,13 @@ def room_public_snapshot(room: RoomState) -> dict:
         "maxPlayers": MAX_PLAYERS,
         "totalRounds": TOTAL_ROUNDS,
     }
+    
+    if room.phase == PHASE_CHAT and room.chat_ends_at:
+        snap["chatEndsAt"] = room.chat_ends_at
+    if room.phase == PHASE_VOTE and room.vote_ends_at:
+        snap["voteEndsAt"] = room.vote_ends_at
+    
+    return snap
 
 # ---------------------------
 # Lifespan (startup/shutdown)
@@ -135,6 +152,14 @@ def room_public_snapshot(room: RoomState) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.sink = Sink()
+
+    async def send_chat(room_id: str, username: str, text: str):
+        ts = int(time.time())
+        app.state.sink.emit_message(room_id, username, text, ts)
+        await broadcast(room_id, {"type": "chat_message", "data": {"user": username, "text": text, "ts": ts}})
+    
+    app.state.shadow_ai = ShadowAIManager(send_chat)
+
     print("✅ Sink started")
     yield
     app.state.sink.shutdown()
@@ -212,41 +237,60 @@ async def join_room(room_id: str, payload: dict):
 
 @app.post("/api/rooms/{room_id}/start")
 async def start_game(room_id: str, payload: dict):
-    """
-    Host-only. Requires >=3 players. Picks AI randomly among players.
-    """
     room = get_room(room_id)
     caller = (payload.get("playerId") or "").strip()
     if not caller:
         raise HTTPException(400, "Missing playerId")
 
+    # Host-only
     if caller != room.host_player_id:
         raise HTTPException(403, "Only host can start the game.")
 
-    if len(room.players) < MIN_PLAYERS:
+    # Room size rules
+    n = len(room.players)
+    if n < MIN_PLAYERS:
         raise HTTPException(400, f"Need at least {MIN_PLAYERS} players to start.")
+    if n > MAX_PLAYERS:
+        raise HTTPException(400, f"Too many players (max {MAX_PLAYERS}).")
 
+    # Only start from lobby
     if room.phase != PHASE_LOBBY:
         raise HTTPException(400, "Game already started.")
 
-    # Pick AI among current players
+    # ---- Reset game state ----
+    room.round = 1
+    room.votes_by_round.clear()
+
+    # cancel any old timers
+    room.phase_task_id += 1
+    room.chat_ends_at = None
+    room.vote_ends_at = None
+
+    # reset per-player state
+    for p in room.players.values():
+        p.eliminated = False
+        p.is_ai = False
+
+    # Assign AI internally (do NOT reveal)
     ai_player_id = random.choice(list(room.players.keys()))
     room.ai_player_id = ai_player_id
-    for pid, p in room.players.items():
-        p.is_ai = (pid == ai_player_id)
-
-    room.round = 1
-    room.phase = PHASE_CHAT
-    room.votes_by_round.clear()
-    room.ai_top_voted_by_round.clear()
+    room.players[ai_player_id].is_ai = True
 
     room_last_activity[room.room_id] = time.time()
 
-    # Broadcast start snapshot + phase
-    await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
-    await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
+    app.state.shadow_ai.reset_for_room()
+
+    # create shadows for all humans (eligible players)
+    for pid, p in room.players.items():
+        # only make shadows for humans (all players are humans in current MVP)
+        app.state.shadow_ai.ensure_shadow(pid, p.username)
+
+
+    # Start round 1 chat (this broadcasts snapshot + sets chatEndsAt + schedules timer)
+    await enter_chat_phase(room)
 
     return {"ok": True, "snapshot": room_public_snapshot(room)}
+
 
 @app.get("/api/rooms/{room_id}/history")
 async def room_history(room_id: str, limit: int = 50):
@@ -281,66 +325,112 @@ def humans_win(room: RoomState) -> bool:
     hits = sum(1 for r in range(1, TOTAL_ROUNDS + 1) if room.ai_top_voted_by_round.get(r))
     return hits >= 2
 
-async def advance_from_vote(room: RoomState):
-    """
-    Called when a vote round completes. Computes round result, advances phase.
-    """
+def eligible_players(room: RoomState) -> List[Player]:
+    return [p for p in room.players.values() if not p.eliminated]
+
+def eligible_voter_ids(room: RoomState) -> Set[str]:
+    return {p.player_id for p in room.players.values() if not p.eliminated}
+
+def eligible_target_ids(room: RoomState) -> Set[str]:
+    # Usually same as eligible voters; adjust later if needed
+    return eligible_voter_ids(room)
+
+def compute_top_voted(votes: Dict[str, str]) -> Optional[str]:
+    if not votes:
+        return None
+    counts: Dict[str, int] = defaultdict(int)
+    for _voter, target in votes.items():
+        counts[target] += 1
+    maxv = max(counts.values())
+    tied = [tid for tid, c in counts.items() if c == maxv]
+    return random.choice(tied)
+
+async def resolve_vote_and_eliminate(room: RoomState):
+    # cancel any pending timer instances
+    room.phase_task_id += 1
+    room.vote_ends_at = None
+
     r = room.round
-    votes = room.votes_by_round[r]
+    votes = room.votes_by_round.get(r, {})
+
+    # pick top vote (random tie-break)
     top = compute_top_voted(votes)
 
-    ai_top = (top is not None and top == room.ai_player_id)
-    room.ai_top_voted_by_round[r] = ai_top
+    eliminated_username = None
+    eliminated_player_id = None
+
+    # only eliminate if valid and not already eliminated
+    if top and top in room.players and not room.players[top].eliminated:
+        room.players[top].eliminated = True
+        eliminated_username = room.players[top].username
+        eliminated_player_id = top
 
     await broadcast(room.room_id, {
-        "type": "round_result",
+        "type": "elimination",
         "data": {
             "round": r,
-            "topTargetPlayerId": top,
-            "aiWasTopVoted": ai_top,
+            "eliminatedPlayerId": eliminated_player_id,
+            "eliminatedUsername": eliminated_username
         }
     })
 
-    # Advance
-    if r < TOTAL_ROUNDS:
-        room.round += 1
-        room.phase = PHASE_CHAT
-        await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
-        await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
-    else:
+    # end conditions
+    alive = eligible_players(room)
+    if r >= TOTAL_ROUNDS or len(alive) <= 1:
         room.phase = PHASE_SCORE
-        winner = "HUMANS" if humans_win(room) else "AI"
-        ai_pid = room.ai_player_id
-        ai_name = room.players[ai_pid].username if ai_pid and ai_pid in room.players else None
+        room.chat_ends_at = None
+        room.vote_ends_at = None
 
         await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
         await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
         await broadcast(room.room_id, {
             "type": "game_over",
             "data": {
-                "winner": winner,
-                "aiPlayerId": ai_pid,
-                "aiUsername": ai_name,
-                "aiTopVotedRounds": [r for r, v in room.ai_top_voted_by_round.items() if v],
+                "remaining": [p.username for p in alive],
+                "eliminated": [p.username for p in room.players.values() if p.eliminated],
             }
         })
+        return
 
-async def enter_vote_phase(room:RoomState):
+    # next round
+    room.round += 1
+    await enter_chat_phase(room)
+
+
+
+async def enter_vote_phase(room: RoomState):
     room.phase = PHASE_VOTE
-    room.votes_by_round[room.round] = {}
     room.vote_ends_at = now_ts() + VOTE_SECONDS
-    room.vote_task_id += 1
-    my_task_id = room.vote_task_id
+    room.chat_ends_at = None
+    room.votes_by_round[room.round] = {}
+    room.phase_task_id += 1
+    my_id = room.phase_task_id
 
-    await broadcast(room.room_id, {"type":"phase_changed","data":{"phase":room.phase,"round":room.round}})
-    await broadcast(room.room_id, {"type":"room_snapshot","data":room_public_snapshot(room) | {"voteEndsAt": room.vote_ends_at}})
+    await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
+    await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
 
     async def timer():
         await asyncio.sleep(VOTE_SECONDS)
-        # only resolve if still same vote phase + same timer instance
-        if room.phase == PHASE_VOTE and room.vote_task_id == my_task_id:
-            await advance_from_vote(room)
-    
+        if room.phase == PHASE_VOTE and room.phase_task_id == my_id:
+            await resolve_vote_and_eliminate(room)
+
+    asyncio.create_task(timer())
+
+async def enter_chat_phase(room: RoomState):
+    room.phase = PHASE_CHAT
+    room.chat_ends_at = now_ts() + CHAT_SECONDS
+    room.vote_ends_at = None
+    room.phase_task_id += 1
+    my_id = room.phase_task_id
+
+    await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
+    await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
+
+    async def timer():
+        await asyncio.sleep(CHAT_SECONDS)
+        if room.phase == PHASE_CHAT and room.phase_task_id == my_id:
+            await enter_vote_phase(room)
+
     asyncio.create_task(timer())
 
 
@@ -391,67 +481,83 @@ async def ws_room(websocket: WebSocket, room_id: str, player_id: str):
             # CHAT
             # -------------------------
             if t == "send_chat":
+                data = msg.get("data") or {}
+                text = (data.get("text") or "").strip()
+
+                # Must exist in room
+                if pid not in room.players:
+                    await websocket.send_json({"type": "error", "text": "Unknown player."})
+                    continue
+
+                player = room.players[pid]
+
+                # Phase gate
                 if room.phase != PHASE_CHAT:
                     await websocket.send_json({"type": "error", "text": "Chat is not enabled right now."})
                     continue
 
-                data = msg.get("data") or {}
-                text = (data.get("text") or "").strip()
-                if not text:
+                # Human permission gate (eliminated humans cannot type)
+                if player.eliminated:
+                    await websocket.send_json({"type": "error", "text": "You are eliminated and cannot chat."})
                     continue
 
-                ts = now_ts()
-                room_last_activity[room.room_id] = time.time()
+                # Send the human message through the canonical pipeline
+                await send_chat_message(room.room_id, player.username, text)
 
-                sender = room.players[pid]
-                # persist (store user_id as username for now to keep schema simple)
-                app.state.sink.emit_message(room.room_id, sender.username, text, ts)
+                # Trigger AI shadows (including eliminated owners)
+                # This method should decide WHICH shadows respond to avoid spam.
+                await app.state.shadow_ai.on_room_message(
+                    room_id=room.room_id,
+                    human_sender_player_id=pid,
+                    human_sender_username=player.username,
+                    human_text=text,
+                    room=room,           
+                )
 
-                # broadcast (server source of truth)
-                await broadcast(room.room_id, {
-                    "type": "chat_message",
-                    "data": {"playerId": pid, "user": sender.username, "text": text, "ts": ts}
-                })
-
-                # AI placeholder: anytime human msg -> print('AI LOGIC HERE')
-                # (If we later make the AI send messages, we'll check sender.is_ai)
-                if not sender.is_ai:
-                    print("AI LOGIC HERE")
+                continue
 
             # -------------------------
             # VOTE
             # -------------------------
             elif t == "cast_vote":
+                data = msg.get("data") or {}
+                voter = room.players[pid]
+                if voter.eliminated:
+                    await websocket.send_json({"type": "error", "text": "You are eliminated and cannot vote."})
+                    continue
+
                 if room.phase != PHASE_VOTE:
                     await websocket.send_json({"type": "error", "text": "Not in vote phase."})
                     continue
 
-                data = msg.get("data") or {}
                 target = (data.get("targetPlayerId") or "").strip()
-                if target not in room.players:
+                print("VOTE targetPlayerId:", target)
+                print("ROOM player keys:", list(room.players.keys()))
+
+
+                # target must exist AND must be eligible (not eliminated)
+                if target not in room.players or room.players[target].eliminated:
                     await websocket.send_json({"type": "error", "text": "Invalid vote target."})
                     continue
 
-                # record vote (allow overwrite for MVP)
+                # only count eligible voters
+                eligible = eligible_voter_ids(room)
+
+                # record vote (allow overwrite)
                 room.votes_by_round[room.round][pid] = target
-                room_last_activity[room.room_id] = time.time()
 
                 submitted = len(room.votes_by_round[room.round])
-                total = len(room.players)  # MVP: all players vote, including AI player
+                total = len(eligible)
 
-                await broadcast(room.room_id, {
-                    "type": "vote_progress",
-                    "data": {"round": room.round, "submitted": submitted, "total": total}
-                })
+                await broadcast(room.room_id, {"type": "vote_progress", "data": {"round": room.round, "submitted": submitted, "total": total}})
 
-                # If all have voted, resolve round
+                # resolve early when all eligible voted
                 if submitted >= total:
-                    room.vote_ends_at = None
-                    room.vote_task_id += 1 #Cancels pending timers 
-                    await advance_from_vote(room)
+                    await resolve_vote_and_eliminate(room)
+
 
             # -------------------------
-            # PHASE CONTROL (host)
+            # PHASE CONTROL (host) USING AS DEBUG REMOVE IN FINAL VERSION
             # -------------------------
             elif t == "end_chat":
                 # Host can end chat early and move to vote
@@ -508,6 +614,24 @@ async def broadcast(room_id: str, payload: dict):
         room = rooms.get(room_id)
         if room and pid in room.players:
             room.players[pid].connected = False
+
+async def send_chat_message(room_id: str, username: str, text: str):
+    text = (text or "").strip()
+    if not text:
+        return
+
+    ts = int(time.time())
+    room_last_activity[room_id] = time.time()
+
+    # Persist
+    app.state.sink.emit_message(room_id, username, text, ts)
+
+    # Broadcast (single source of truth)
+    await broadcast(room_id, {
+        "type": "chat_message",
+        "data": {"user": username, "text": text, "ts": ts}
+    })
+
 
 # ---------------------------
 # DEBUG LINES (keep)

@@ -6,20 +6,24 @@
   <title>DoppelBot Chat</title>
   <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
+  <!-- Top Bar -->
   <div class="topbar">
     <button class="icon-btn" id="hamburger" aria-label="Open menu">☰</button>
-    <div class = "topbar-title">
+
+    <div class="topbar-title">
       <div class="logo" aria-hidden="true"></div>
       <div>
         <div class="title">DoppelBot Chat</div>
         <div class="subtitle">frontend prototype</div>
       </div>
     </div>
-    
+
     <div class="status" id="status"><span class="dot red"></span> disconnected</div>
   </div>
 
+  <!-- Sidebar -->
   <aside class="sidebar" id="sidebar" aria-hidden="true">
     <div class="sidebar-head">
       <div class="sidebar-title">Menu</div>
@@ -38,112 +42,150 @@
 
   <div class="backdrop" id="backdrop" aria-hidden="true"></div>
 
+  <!-- Screens -->
   <div class="screens">
+
+    <!-- Rules Screen -->
     <section class="screen active" id="screenRules">
-    <div class="card">
-      <div class="head"><strong>Rules</strong></div>
-      <div class="body">
-        <ol class="rules">
-          <li><b>Join a room</b> and chat with other players.</li>
-          <li>One “player” is the AI. Your goal is to <b>guess who</b>.</li>
-          <li>Be convincing the AI is trying to blend in.</li>
-          <li>When voting starts, submit your guess.</li>
-        </ol>
+      <div class="card">
+        <div class="head"><strong>Rules</strong></div>
+        <div class="body">
+          <ol class="rules">
+            <li><b>Join a room</b> and chat with other players.</li>
+            <li>One “player” is the AI. Your goal is to <b>guess who</b>.</li>
+            <li>Be convincing — the AI is trying to blend in.</li>
+            <li>When voting starts, submit your guess.</li>
+          </ol>
 
-        <div class="actions" style="margin-top:14px">
-          <button class="btn primary" id="btnPlayFromRules">Play Game</button>
-          <button class="btn" id="btnOpenMenu">Menu</button>
+          <div class="actions" style="margin-top:14px">
+            <button class="btn primary" id="btnPlayFromRules">Play Game</button>
+            <button class="btn" id="btnOpenMenu">Menu</button>
+          </div>
+
+          <p style="color:var(--muted); margin-top:12px">
+            Tip: Use the menu (☰) any time to jump back here.
+          </p>
         </div>
-
-        <p style="color:var(--muted); margin-top:12px">
-          Tip: Use the menu (☰) any time to jump back here.
-        </p>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <section class="screen" id="screenApp">
-    <div class="app">
+    <!-- App Screen -->
+    <section class="screen" id="screenApp">
+      <div class="app">
+        <div class="grid">
+          <section class="card">
+            <div class="head"><strong>Session</strong></div>
+            <div class="body col">
+              <div class="col">
+                <label for="mode">Mode</label>
+                <select id="mode">
+                  <option value="mock" selected>Mock (no backend yet)</option>
+                  <option value="ws">WebSocket (plug in later)</option>
+                </select>
+              </div>
 
-      <div class="grid">
-        <section class="card">
-          <div class="head"><strong>Session</strong></div>
-          <div class="body col">
-            <div class="col">
-              <label for="mode">Mode</label>
-              <select id="mode">
-                <option value="mock" selected>Mock (no backend yet)</option>
-                <option value="ws">WebSocket (plug in later)</option>
-              </select>
+              <div class="actions">
+                <button class="btn" id="disconnect">Disconnect</button>
+                <button class="btn" id="clear">Clear Chat</button>
+              </div>
+
+              <div class="col">
+                <label>Notes</label>
+                <ul style="margin:0 0 0 18px; padding:0; color:var(--muted)">
+                  <li>Use the <b>Room Select</b> overlay to pick or create a room.</li>
+                  <li>Start in <em>Mock</em> mode; switch to <em>WebSocket</em> after backend.</li>
+                </ul>
+              </div>
             </div>
+          </section>
+
+          <section class="card chat-wrap">
+            <div class="head">
+              <strong>Room <span id="roomLabel" class="monospace">—</span></strong>
+              <div class="actions">
+                <span id="chatTimer" class="monospace" style="opacity:.85"></span>
+                <button class="btn" id="openRoomSelect">Change Room</button>
+              </div>
+            </div>
+
+            <div id="log" class="chat-log" aria-live="polite"></div>
+
+            <div class="composer">
+              <input id="input" placeholder="Type a message… (Enter to send)" />
+              <button class="btn primary" id="send">Send</button>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Room Select Overlay -->
+      <div class="overlay" id="overlay" role="dialog" aria-modal="true" style="display:none">
+        <section class="card modal">
+          <div class="head">
+            <strong>Select a room</strong>
             <div class="actions">
-              <button class="btn" id="disconnect">Disconnect</button>
-              <button class="btn" id="clear">Clear Chat</button>
+              <button class="btn" id="refreshRooms">Refresh</button>
+              <button class="btn ghost" id="closeOverlay">Close</button>
             </div>
-            <div class="col">
-              <label>Notes</label>
+          </div>
+
+          <div class="body">
+            <div>
+              <div id="roomList" class="list" role="list"></div>
+            </div>
+
+            <div class="col" style="padding-right:16px">
+              <label>Create new room</label>
+              <input id="newRoomId" class="monospace" placeholder="e.g., ABC123" />
+              <button class="btn primary" id="createRoom">Create & Join</button>
+
+              <hr style="border-color:rgba(255,255,255,.08)"/>
+
+              <label>Tips</label>
               <ul style="margin:0 0 0 18px; padding:0; color:var(--muted)">
-                <li>Use the <b>Room Select</b> overlay to pick or create a room.</li>
-                <li>Start in <em>Mock</em> mode; switch to <em>WebSocket</em> after backend.</li>
+                <li>This list is <b>mocked</b> until the backend is ready.</li>
+                <li>Later, replace with <code>fetch('/api/rooms')</code> and <code>POST /api/rooms</code>.</li>
               </ul>
             </div>
           </div>
         </section>
+      </div>
 
-        <section class="card chat-wrap">
-          <div class="head"><strong>Room <span id="roomLabel" class="monospace">—</span></strong>
-            <div class="actions"><button class="btn" id="openRoomSelect">Change Room</button></div>
+      <!-- Vote Overlay -->
+      <div class="overlay" id="voteOverlay" role="dialog" aria-modal="true" style="display:none">
+        <section class="card modal">
+          <div class="head">
+            <strong>Vote: Who is the AI?</strong>
+            <div class="actions">
+              <span id="voteTimer" class="monospace" style="opacity:.85"></span>
+              <button class="btn ghost" id="closeVoteOverlay">Close</button>
+            </div>
           </div>
-          <div id="log" class="chat-log" aria-live="polite"></div>
-          <div class="composer">
-            <input id="input" placeholder="Type a message… (Enter to send)" />
-            <button class="btn primary" id="send">Send</button>
+
+          <div class="body">
+            <div id="voteList" class="list" role="list"></div>
+            <div style="color:var(--muted); margin-top:10px">
+              Voting ends when everyone votes or the timer reaches 0.
+            </div>
           </div>
         </section>
       </div>
-    </div>
 
-    <div class="overlay" id="overlay" role="dialog" aria-modal="true">
-      <section class="card modal">
-        <div class="head">
-          <strong>Select a room</strong>
-          <div class="actions">
-            <button class="btn" id="refreshRooms">Refresh</button>
-            <button class="btn ghost" id="closeOverlay">Close</button>
-          </div>
-        </div>
+    </section>
+
+    <!-- About Screen -->
+    <section class="screen" id="screenAbout">
+      <div class="card">
+        <div class="head"><strong>About</strong></div>
         <div class="body">
-          <div>
-            <div id="roomList" class="list" role="list"></div>
-          </div>
-          <div class="col" style="padding-right:16px">
-            <label>Create new room</label>
-            <input id="newRoomId" class="monospace" placeholder="e.g., ABC123" />
-            <button class="btn primary" id="createRoom">Create & Join</button>
-            <hr style="border-color:rgba(255,255,255,.08)"/>
-            <label>Tips</label>
-            <ul style="margin:0 0 0 18px; padding:0; color:var(--muted)">
-              <li>This list is <b>mocked</b> until the backend is ready.</li>
-              <li>Later, replace with <code>fetch('/api/rooms')</code> and <code>POST /api/rooms</code>.</li>
-            </ul>
-          </div>
+          <p style="color:var(--muted); margin:0">
+            DoppelBot is a multiplayer social-deduction chat game used in research. :D
+          </p>
         </div>
-      </section>
-    </div>
-  </section>
-
-  <section class="screen" id="screenAbout">
-    <div class="card">
-      <div class="head"><strong>About</strong></div>
-      <div class="body">
-        <p style="color:var(--muted); margin:0">
-          DoppelBot is a multiplayer social-deduction chat game used in research. :D
-        </p>
       </div>
-    </div>
-  </section>
-</div>
+    </section>
 
+  </div> <!-- /screens -->
 
   <script src="app.js" defer></script>
 </body>
