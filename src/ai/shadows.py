@@ -36,7 +36,15 @@ class ShadowAIManager:
     def get_shadow(self, owner_player_id: str) -> Optional[ShadowAI]:
         return self._agents_by_owner.get(owner_player_id)
 
-    async def on_human_message(self, room_id: str, owner_player_id: str, owner_username: str, human_text: str):
+    async def on_human_message(
+        self,
+        room_id: str,
+        owner_player_id: str,
+        owner_username: str,
+        human_text: str,
+        conversation_history: list,  # [{"user": str, "text": str, "ts": int}, ...]
+        game_rules: str,
+    ):
         """
         Placeholder AI logic:
         - prints "AI LOGIC HERE"
@@ -44,7 +52,11 @@ class ShadowAIManager:
         """
         agent = self.ensure_shadow(owner_player_id, owner_username)
 
-        print("AI LOGIC HERE") 
+        print("AI LOGIC HERE")
+        # Dan's variables:
+        # human_text          -> the specific message this player just sent
+        # conversation_history -> full chat log for the room (chronological)
+        # game_rules           -> string description of the game rules
 
         # Simulate thinking delay
         await asyncio.sleep(0.35 + random.random() * 0.65)
@@ -52,8 +64,21 @@ class ShadowAIManager:
         reply = f"(placeholder) I saw: {human_text}"
         await self._send_chat(room_id, agent.username, reply)
 
-    async def on_room_message(self, room_id: str, human_sender_player_id: str, human_sender_username: str, human_text: str, room):
+    async def on_room_message(
+        self,
+        room_id: str,
+        human_sender_player_id: str,
+        human_sender_username: str,
+        human_text: str,
+        room,
+        conversation_history: list,  # [{"user": str, "text": str, "ts": int}, ...]
+        game_rules: str,
+    ):
         print("AI LOGIC HERE")
+        # Dan's variables:
+        # human_text          -> the specific message that was just sent
+        # conversation_history -> full chat log for the room (chronological)
+        # game_rules           -> string description of the game rules
 
         # Example: pick 1 random shadow (could be eliminated owner) to respond
         # to keep chat from exploding.
@@ -63,7 +88,7 @@ class ShadowAIManager:
         for pid, p in room.players.items():
             if pid == human_sender_player_id:
                 continue
-            # include eliminated too ✅
+            # include eliminated too 
             agent = self.ensure_shadow(pid, p.username)
             candidates.append(agent)
 

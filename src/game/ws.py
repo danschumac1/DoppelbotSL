@@ -3,7 +3,7 @@ import json
 import time
 from fastapi import WebSocket, WebSocketDisconnect
 
-from .constants import PHASE_CHAT, PHASE_VOTE
+from .constants import PHASE_CHAT, PHASE_VOTE, GAME_RULES
 from .state import get_room, room_public_snapshot, room_connections, room_last_activity
 from .engine import eligible_voter_ids, resolve_vote_and_eliminate, enter_vote_phase
 
@@ -57,12 +57,15 @@ async def ws_room(websocket: WebSocket, room_id: str, player_id: str, *, sink, b
                 await send_chat_message(room.room_id, player.username, text)
 
                 # shadows persist even if eliminated owners (handled inside on_room_message)
+                history = sink.recent_messages(room.room_id, limit=50)
                 await shadow_ai.on_room_message(
                     room_id=room.room_id,
                     human_sender_player_id=pid,
                     human_sender_username=player.username,
                     human_text=text,
                     room=room,
+                    conversation_history=history,
+                    game_rules=GAME_RULES,
                 )
                 continue
 
