@@ -46,8 +46,16 @@ def register_api(app, *, get_sink, broadcast, get_shadow_ai):
         username = generate_username(taken)
         player_id = str(uuid.uuid4())
 
+        display_name = (payload.get("displayName") or "").strip()[:64]
+        participant_id = (payload.get("participantId") or "").strip()[:64]
+
         is_first = (len(room.players) == 0)
-        room.players[player_id] = Player(player_id=player_id, username=username)
+        room.players[player_id] = Player(
+            player_id=player_id,
+            username=username,
+            display_name=display_name,
+            participant_id=participant_id,
+        )
 
         if is_first:
             room.host_player_id = player_id
@@ -60,6 +68,7 @@ def register_api(app, *, get_sink, broadcast, get_shadow_ai):
             "roomId": room.room_id,
             "playerId": player_id,
             "username": username,
+            "displayName": display_name,
             "isHost": (player_id == room.host_player_id),
             "snapshot": room_public_snapshot(room),
         }

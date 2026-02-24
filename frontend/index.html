@@ -42,6 +42,42 @@
 
   <div class="backdrop" id="backdrop" aria-hidden="true"></div>
 
+  <!-- Registration Overlay (shown on first load, before room select) -->
+  <div class="overlay" id="registrationOverlay" role="dialog" aria-modal="true" style="display:none">
+    <section class="card modal">
+      <div class="head"><strong>Register to Play</strong></div>
+      <div class="body col" style="grid-template-columns:1fr">
+        <div class="col">
+          <label for="regName">Display Name <span style="color:var(--accent)">*</span></label>
+          <input id="regName" type="text" placeholder="Your name or nickname" maxlength="64" autocomplete="name" />
+        </div>
+
+        <div class="col">
+          <label for="regParticipantId">Participant ID <span style="color:var(--muted)">(assigned by researcher)</span></label>
+          <input id="regParticipantId" type="text" placeholder="Leave blank if not provided" maxlength="64" />
+        </div>
+
+        <div class="col">
+          <label for="regAge">Age <span style="color:var(--accent)">*</span></label>
+          <input id="regAge" type="number" placeholder="e.g. 24" min="1" max="120" style="max-width:120px" />
+        </div>
+
+        <div style="display:flex; align-items:flex-start; gap:10px; margin-top:4px">
+          <input type="checkbox" id="regConsent" style="width:18px; height:18px; margin-top:2px; flex-shrink:0; cursor:pointer" />
+          <label for="regConsent" style="margin:0; cursor:pointer; font-size:13px; color:var(--muted); line-height:1.5">
+            I consent to participate in this study and understand that my chat messages may be recorded for research purposes.
+          </label>
+        </div>
+
+        <div id="regError" style="color:var(--danger); font-size:13px; display:none; margin-top:4px"></div>
+
+        <div class="actions" style="margin-top:8px; justify-content:flex-end">
+          <button class="btn primary" id="btnRegister">Continue &rarr;</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
   <!-- Screens -->
   <div class="screens">
 

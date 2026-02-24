@@ -12,7 +12,9 @@ from .constants import (
 @dataclass
 class Player:
     player_id: str
-    username: str
+    username: str           # auto-generated code name shown in chat
+    display_name: str = ""  # real name from registration (research use)
+    participant_id: str = ""  # researcher-assigned ID (research use)
     is_ai: bool = False        # server-only
     connected: bool = True
     eliminated: bool = False

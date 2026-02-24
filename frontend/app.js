@@ -15,6 +15,7 @@ let currentPlayerId = '';
 let currentUsername = '';
 let isHost = false;
 let chatTimerInterval = null;
+let registrationData = null; // { displayName, participantId, age }
 
 $('#closeVoteOverlay')?.addEventListener('click', () => {
   if (voteOverlay) voteOverlay.style.display = 'none';
@@ -23,6 +24,51 @@ $('#closeVoteOverlay')?.addEventListener('click', () => {
 
 // game UI state (from server)
 let roomSnapshot = null; // last snapshot
+
+// --- Registration ---
+function showRegistration() {
+  document.getElementById('registrationOverlay').style.display = 'grid';
+  document.getElementById('regName').focus();
+}
+
+function submitRegistration() {
+  const name = document.getElementById('regName').value.trim();
+  const participantId = document.getElementById('regParticipantId').value.trim();
+  const age = parseInt(document.getElementById('regAge').value, 10);
+  const consent = document.getElementById('regConsent').checked;
+  const errEl = document.getElementById('regError');
+
+  errEl.style.display = 'none';
+  errEl.textContent = '';
+
+  if (!name) {
+    errEl.textContent = 'Display name is required.';
+    errEl.style.display = 'block';
+    document.getElementById('regName').focus();
+    return;
+  }
+  if (!age || isNaN(age) || age < 1) {
+    errEl.textContent = 'Please enter your age.';
+    errEl.style.display = 'block';
+    document.getElementById('regAge').focus();
+    return;
+  }
+  if (!consent) {
+    errEl.textContent = 'You must consent to participate before continuing.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  registrationData = { displayName: name, participantId, age };
+  document.getElementById('registrationOverlay').style.display = 'none';
+  overlay.style.display = 'grid';
+  loadRooms();
+}
+
+document.getElementById('btnRegister').addEventListener('click', submitRegistration);
+document.getElementById('regName').addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitRegistration();
+});
 
 function setStatus(ok){
   connected=ok;
@@ -223,7 +269,10 @@ async function joinRoomFlow(roomId) {
   const res = await fetch(`/api/rooms/${encodeURIComponent(room)}/join`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}) // server ignores name now
+    body: JSON.stringify({
+      displayName: registrationData?.displayName || '',
+      participantId: registrationData?.participantId || '',
+    })
   });
 
   if (!res.ok) {
@@ -610,6 +659,5 @@ function goPlay(){
 }
 
 // initial
-overlay.style.display='grid';
-loadRooms();
+showRegistration();
 setStatus(false);
