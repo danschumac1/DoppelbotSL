@@ -48,6 +48,7 @@ def register_api(app, *, get_sink, broadcast, get_shadow_ai):
 
         display_name = (payload.get("displayName") or "").strip()[:64]
         participant_id = (payload.get("participantId") or "").strip()[:64]
+        age = max(0, int(payload.get("age") or 0))
 
         is_first = (len(room.players) == 0)
         room.players[player_id] = Player(
@@ -55,6 +56,7 @@ def register_api(app, *, get_sink, broadcast, get_shadow_ai):
             username=username,
             display_name=display_name,
             participant_id=participant_id,
+            age=age,
         )
 
         if is_first:
@@ -62,7 +64,11 @@ def register_api(app, *, get_sink, broadcast, get_shadow_ai):
             room.phase = PHASE_LOBBY
             room.round = 0
 
-        room_last_activity[room.room_id] = time.time()
+        joined_at = int(time.time())
+        room_last_activity[room.room_id] = joined_at
+
+        sink = get_sink()
+        sink.emit_player(player_id, rid, username, display_name, participant_id, age, joined_at)
 
         return {
             "roomId": room.room_id,
@@ -112,11 +118,12 @@ def register_api(app, *, get_sink, broadcast, get_shadow_ai):
 
         room_last_activity[room.room_id] = time.time()
 
-        # shadows
+        # shadows — pass human names so shadows get distinct code names
         shadow_ai = get_shadow_ai()
         shadow_ai.reset_for_room()
+        human_names = {p.username for p in room.players.values()}
         for pid, p in room.players.items():
-            shadow_ai.ensure_shadow(pid, p.username)
+            shadow_ai.ensure_shadow(pid, p.username, human_names)
 
         await enter_chat_phase(room, broadcast)
         return {"ok": True, "snapshot": room_public_snapshot(room)}

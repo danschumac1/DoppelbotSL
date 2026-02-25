@@ -93,11 +93,24 @@ async def resolve_vote_and_eliminate(room: RoomState, broadcast: BroadcastFn):
 
         await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
         await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
+        ai_player = room.players.get(room.ai_player_id) if room.ai_player_id else None
+        ai_username = ai_player.username if ai_player else None
+        ai_won = bool(ai_player and not ai_player.eliminated)
+
         await broadcast(room.room_id, {
             "type": "game_over",
             "data": {
-                "remaining": [p.username for p in alive],
-                "eliminated": [p.username for p in room.players.values() if p.eliminated],
+                "aiUsername": ai_username,
+                "aiWon": ai_won,
+                "winner": "ai" if ai_won else "humans",
+                "remaining": [
+                    {"username": p.username, "isAi": p.is_ai}
+                    for p in alive
+                ],
+                "eliminated": [
+                    {"username": p.username, "isAi": p.is_ai}
+                    for p in room.players.values() if p.eliminated
+                ],
             }
         })
         return

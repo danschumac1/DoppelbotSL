@@ -2,33 +2,42 @@
 import asyncio
 import random
 from dataclasses import dataclass
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional, Callable, Set
+
+from game.util import generate_username
 
 @dataclass
 class ShadowAI:
     owner_player_id: str
-    username: str  # what shows in chat (e.g. "PebbleFox_AI")
+    username: str  # unique code name shown in chat, different from owner's
 
 class ShadowAIManager:
     """
     Manages one AI shadow per human player.
+    Each shadow gets its own unique code name (not derived from the owner's).
     Calls back into server via `send_chat(room_id, username, text)`.
     """
     def __init__(self, send_chat: Callable[[str, str, str], "asyncio.Future"]):
         self._send_chat = send_chat
         self._agents_by_owner: Dict[str, ShadowAI] = {}
+        self._shadow_names: Set[str] = set()  # tracks all names used by shadows
 
     def reset_for_room(self):
         self._agents_by_owner.clear()
+        self._shadow_names.clear()
 
-    def ensure_shadow(self, owner_player_id: str, owner_username: str) -> ShadowAI:
+    def ensure_shadow(self, owner_player_id: str, owner_username: str, human_taken: Set[str] = None) -> ShadowAI:
         if owner_player_id in self._agents_by_owner:
             return self._agents_by_owner[owner_player_id]
 
-        # Naming: tweak later. Keep it obvious for now.
+        # Generate a code name that doesn't collide with any human or other shadow
+        taken = self._shadow_names | (human_taken or set())
+        shadow_username = generate_username(taken)
+        self._shadow_names.add(shadow_username)
+
         agent = ShadowAI(
             owner_player_id=owner_player_id,
-            username=f"{owner_username}_AI"
+            username=shadow_username,
         )
         self._agents_by_owner[owner_player_id] = agent
         return agent
@@ -84,12 +93,13 @@ class ShadowAIManager:
         # to keep chat from exploding.
         import random, asyncio
 
+        human_taken = {p.username for p in room.players.values()}
         candidates = []
         for pid, p in room.players.items():
             if pid == human_sender_player_id:
                 continue
-            # include eliminated too 
-            agent = self.ensure_shadow(pid, p.username)
+            # include eliminated too
+            agent = self.ensure_shadow(pid, p.username, human_taken)
             candidates.append(agent)
 
         if not candidates:

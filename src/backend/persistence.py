@@ -15,6 +15,17 @@ CREATE TABLE IF NOT EXISTS messages (
   ts INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_messages_room_ts ON messages(room_id, ts);
+
+CREATE TABLE IF NOT EXISTS players (
+  player_id   TEXT PRIMARY KEY,
+  room_id     TEXT NOT NULL,
+  username    TEXT NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  participant_id TEXT NOT NULL DEFAULT '',
+  age         INTEGER NOT NULL DEFAULT 0,
+  joined_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_players_room ON players(room_id);
 """
 
 class Sink:
@@ -39,6 +50,10 @@ class Sink:
     def emit_message(self, room_id: str, user_id: str, text: str, ts: int):
         self.q.put(("message", room_id, user_id, text, ts))
 
+    def emit_player(self, player_id: str, room_id: str, username: str,
+                    display_name: str, participant_id: str, age: int, joined_at: int):
+        self.q.put(("player", player_id, room_id, username, display_name, participant_id, age, joined_at))
+
     def recent_messages(self, room_id: str, limit: int = 50):
         con = sqlite3.connect(self.path)
         cur = con.execute(
@@ -58,11 +73,21 @@ class Sink:
                 except queue.Empty:
                     continue
 
-                kind, room, user, text, ts = item
+                kind = item[0]
                 if kind == "message":
+                    _, room, user, text, ts = item
                     con.execute(
                         "INSERT INTO messages(room_id,user_id,text,ts) VALUES(?,?,?,?)",
                         (room, user, text, ts),
+                    )
+                    con.commit()
+                elif kind == "player":
+                    _, player_id, room_id, username, display_name, participant_id, age, joined_at = item
+                    con.execute(
+                        """INSERT OR REPLACE INTO players
+                           (player_id,room_id,username,display_name,participant_id,age,joined_at)
+                           VALUES(?,?,?,?,?,?,?)""",
+                        (player_id, room_id, username, display_name, participant_id, age, joined_at),
                     )
                     con.commit()
         finally:

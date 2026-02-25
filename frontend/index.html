@@ -78,6 +78,38 @@
     </section>
   </div>
 
+  <!-- Score Screen Overlay (shown on game_over) -->
+  <div class="overlay" id="scoreOverlay" role="dialog" aria-modal="true" style="display:none">
+    <section class="card modal">
+      <div class="head">
+        <strong>Game Over</strong>
+      </div>
+      <div class="body col" style="grid-template-columns:1fr; gap:16px">
+
+        <div id="scoreWinner" style="text-align:center; font-size:22px; font-weight:800; padding:8px 0"></div>
+
+        <div id="scoreAiReveal" style="text-align:center; color:var(--muted); font-size:14px"></div>
+
+        <hr style="border:none; border-top:1px solid var(--border-soft); margin:0" />
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px">
+          <div>
+            <div style="font-size:12px; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.05em">Survived</div>
+            <div id="scoreSurvivors" class="col" style="gap:6px"></div>
+          </div>
+          <div>
+            <div style="font-size:12px; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.05em">Eliminated</div>
+            <div id="scoreEliminated" class="col" style="gap:6px"></div>
+          </div>
+        </div>
+
+        <div class="actions" style="justify-content:flex-end; margin-top:4px">
+          <button class="btn primary" id="btnPlayAgain">Play Again</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
   <!-- Screens -->
   <div class="screens">
 

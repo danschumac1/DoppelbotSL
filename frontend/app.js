@@ -272,6 +272,7 @@ async function joinRoomFlow(roomId) {
     body: JSON.stringify({
       displayName: registrationData?.displayName || '',
       participantId: registrationData?.participantId || '',
+      age: registrationData?.age || 0,
     })
   });
 
@@ -421,8 +422,7 @@ function handleServerEvent(msg){
   }
 
   if (t === 'game_over') {
-    const d = msg.data || {};
-    appendMsg('system', 'Game Over', `Winner: ${d.winner}. AI was ${d.aiUsername}.`);
+    showScoreScreen(msg.data || {});
     return;
   }
 
@@ -657,6 +657,71 @@ function goPlay(){
   overlay.style.display = 'grid';
   loadRooms();
 }
+
+// --- Score Screen ---
+function showScoreScreen(data) {
+  const aiWon = !!data.aiWon;
+  const aiUsername = data.aiUsername || 'Unknown';
+  const remaining = Array.isArray(data.remaining) ? data.remaining : [];
+  const eliminated = Array.isArray(data.eliminated) ? data.eliminated : [];
+
+  // Winner banner
+  const winnerEl = document.getElementById('scoreWinner');
+  if (aiWon) {
+    winnerEl.textContent = 'The AI Wins!';
+    winnerEl.style.color = 'var(--accent)';
+  } else {
+    winnerEl.textContent = 'Humans Win!';
+    winnerEl.style.color = '#6ddf8a';
+  }
+
+  // AI reveal
+  document.getElementById('scoreAiReveal').textContent = `The AI was: ${aiUsername}`;
+
+  // Survivors list
+  const survivorsEl = document.getElementById('scoreSurvivors');
+  survivorsEl.innerHTML = '';
+  if (remaining.length === 0) {
+    survivorsEl.innerHTML = '<span style="color:var(--muted)">None</span>';
+  } else {
+    remaining.forEach(p => {
+      const row = document.createElement('div');
+      row.className = 'room-item';
+      row.style.padding = '8px 10px';
+      row.innerHTML = `
+        <span class="monospace">${escapeHtml(p.username)}</span>
+        ${p.isAi ? '<span style="color:var(--accent); font-size:12px">AI</span>' : ''}
+      `;
+      survivorsEl.appendChild(row);
+    });
+  }
+
+  // Eliminated list
+  const eliminatedEl = document.getElementById('scoreEliminated');
+  eliminatedEl.innerHTML = '';
+  if (eliminated.length === 0) {
+    eliminatedEl.innerHTML = '<span style="color:var(--muted)">None</span>';
+  } else {
+    eliminated.forEach(p => {
+      const row = document.createElement('div');
+      row.className = 'room-item';
+      row.style.padding = '8px 10px';
+      row.innerHTML = `
+        <span class="monospace" style="color:var(--muted)">${escapeHtml(p.username)}</span>
+        ${p.isAi ? '<span style="color:var(--accent); font-size:12px">AI</span>' : ''}
+      `;
+      eliminatedEl.appendChild(row);
+    });
+  }
+
+  document.getElementById('scoreOverlay').style.display = 'grid';
+}
+
+document.getElementById('btnPlayAgain').addEventListener('click', () => {
+  document.getElementById('scoreOverlay').style.display = 'none';
+  overlay.style.display = 'grid';
+  loadRooms();
+});
 
 // initial
 showRegistration();
