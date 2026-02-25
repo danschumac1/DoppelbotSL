@@ -1,7 +1,6 @@
 # src/game/api.py
 import time
 import uuid
-import random
 from fastapi import HTTPException
 
 from .constants import MIN_PLAYERS, MAX_PLAYERS, PHASE_LOBBY
@@ -107,23 +106,33 @@ def register_api(app, *, get_sink, broadcast, get_shadow_ai):
         room.chat_ends_at = None
         room.vote_ends_at = None
 
+        # remove all previous AI players from the room (if any)
+        for pid in [pid for pid, p in room.players.items() if p.is_ai]:
+            del room.players[pid]
+        room.ai_player_id = None
+
+        # reset all remaining (human) players
         for p in room.players.values():
             p.eliminated = False
             p.is_ai = False
 
-        # internal AI assignment
-        ai_pid = random.choice(list(room.players.keys()))
-        room.ai_player_id = ai_pid
-        room.players[ai_pid].is_ai = True
+        # add one AI player per human — equal numbers so neither side has an advantage
+        n_humans = len(room.players)
+        taken = {p.username for p in room.players.values()}
+        for _ in range(n_humans):
+            ai_username = generate_username(taken)
+            taken.add(ai_username)
+            ai_pid = str(uuid.uuid4())
+            room.players[ai_pid] = Player(
+                player_id=ai_pid,
+                username=ai_username,
+                is_ai=True,
+            )
 
         room_last_activity[room.room_id] = time.time()
 
-        # shadows — pass human names so shadows get distinct code names
         shadow_ai = get_shadow_ai()
         shadow_ai.reset_for_room()
-        human_names = {p.username for p in room.players.values()}
-        for pid, p in room.players.items():
-            shadow_ai.ensure_shadow(pid, p.username, human_names)
 
         await enter_chat_phase(room, broadcast)
         return {"ok": True, "snapshot": room_public_snapshot(room)}

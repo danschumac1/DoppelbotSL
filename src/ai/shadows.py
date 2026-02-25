@@ -66,12 +66,11 @@ class ShadowAIManager:
         # human_text          -> the specific message this player just sent
         # conversation_history -> full chat log for the room (chronological)
         # game_rules           -> string description of the game rules
-
-        # Simulate thinking delay
-        await asyncio.sleep(0.35 + random.random() * 0.65)
-
-        reply = f"(placeholder) I saw: {human_text}"
-        await self._send_chat(room_id, agent.username, reply)
+        # agent.username      -> the shadow's code name to send chat as
+        #
+        # Replace the pass below with real AI logic, e.g.:
+        #   await self._send_chat(room_id, agent.username, reply)
+        pass
 
     async def on_room_message(
         self,
@@ -88,24 +87,13 @@ class ShadowAIManager:
         # human_text          -> the specific message that was just sent
         # conversation_history -> full chat log for the room (chronological)
         # game_rules           -> string description of the game rules
+        #
+        # The AI player is a real room participant. Send as it like this:
+        #   ai_player = room.players.get(room.ai_player_id)
+        #   await self._send_chat(room_id, ai_player.username, reply)
 
-        # Example: pick 1 random shadow (could be eliminated owner) to respond
-        # to keep chat from exploding.
-        import random, asyncio
-
-        human_taken = {p.username for p in room.players.values()}
-        candidates = []
-        for pid, p in room.players.items():
-            if pid == human_sender_player_id:
-                continue
-            # include eliminated too
-            agent = self.ensure_shadow(pid, p.username, human_taken)
-            candidates.append(agent)
-
-        if not candidates:
-            return
-
-        agent = random.choice(candidates)
-
-        await asyncio.sleep(0.35 + random.random() * 0.65)
-        await self._send_chat(room_id, agent.username, f"(placeholder) reacting to: {human_text}")
+        # Placeholder: pick a random alive AI player and respond as it
+        alive_ais = [p for p in room.players.values() if p.is_ai and not p.eliminated]
+        if alive_ais:
+            ai_player = random.choice(alive_ais)
+            await self._send_chat(room_id, ai_player.username, f"[AI placeholder] heard: {human_text[:40]}")

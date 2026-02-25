@@ -17,7 +17,8 @@ def eligible_players(room: RoomState) -> List[Player]:
     return [p for p in room.players.values() if not p.eliminated]
 
 def eligible_voter_ids(room: RoomState) -> Set[str]:
-    return {p.player_id for p in room.players.values() if not p.eliminated}
+    # AI player cannot vote — only count human players toward the total
+    return {p.player_id for p in room.players.values() if not p.eliminated and not p.is_ai}
 
 def compute_top_voted(votes: Dict[str, str]) -> Optional[str]:
     if not votes:
@@ -86,21 +87,28 @@ async def resolve_vote_and_eliminate(room: RoomState, broadcast: BroadcastFn):
     })
 
     alive = eligible_players(room)
-    if r >= TOTAL_ROUNDS or len(alive) <= 1:
+    alive_ais = [p for p in alive if p.is_ai]
+    all_ais_gone = len(alive_ais) == 0
+
+    # n_humans is stable — is_ai never changes after game start
+    n_humans = sum(1 for p in room.players.values() if not p.is_ai)
+
+    # end when surviving players equals original human count (N eliminations done)
+    if len(alive) <= n_humans or r >= TOTAL_ROUNDS:
         room.phase = PHASE_SCORE
         room.chat_ends_at = None
         room.vote_ends_at = None
 
         await broadcast(room.room_id, {"type": "phase_changed", "data": {"phase": room.phase, "round": room.round}})
         await broadcast(room.room_id, {"type": "room_snapshot", "data": room_public_snapshot(room)})
-        ai_player = room.players.get(room.ai_player_id) if room.ai_player_id else None
-        ai_username = ai_player.username if ai_player else None
-        ai_won = bool(ai_player and not ai_player.eliminated)
+
+        ai_won = not all_ais_gone  # AIs win if any survived
+        ai_usernames = [p.username for p in room.players.values() if p.is_ai]
 
         await broadcast(room.room_id, {
             "type": "game_over",
             "data": {
-                "aiUsername": ai_username,
+                "aiUsernames": ai_usernames,
                 "aiWon": ai_won,
                 "winner": "ai" if ai_won else "humans",
                 "remaining": [
