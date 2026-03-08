@@ -171,7 +171,7 @@ Chat messages are stored in a separate `messages` table with `room_id`, `user` (
 
 ---
 
-## Implementing AI Logic (for Dan)
+## Implementing AI Logic
 
 All AI behavior lives in `src/ai/shadows.py`. The key hook is `on_room_message`, called every time a human sends a chat message during the CHAT phase.
 
