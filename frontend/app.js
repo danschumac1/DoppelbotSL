@@ -661,7 +661,7 @@ function goPlay(){
 // --- Score Screen ---
 function showScoreScreen(data) {
   const aiWon = !!data.aiWon;
-  const aiUsername = data.aiUsername || 'Unknown';
+  const aiUsernames = Array.isArray(data.aiUsernames) ? data.aiUsernames : (data.aiUsername ? [data.aiUsername] : []);
   const remaining = Array.isArray(data.remaining) ? data.remaining : [];
   const eliminated = Array.isArray(data.eliminated) ? data.eliminated : [];
 
@@ -676,7 +676,8 @@ function showScoreScreen(data) {
   }
 
   // AI reveal
-  document.getElementById('scoreAiReveal').textContent = `The AI was: ${aiUsername}`;
+  const aiLabel = aiUsernames.length === 1 ? 'The AI was' : 'The AIs were';
+  document.getElementById('scoreAiReveal').textContent = `${aiLabel}: ${aiUsernames.join(', ') || 'Unknown'}`;
 
   // Survivors list
   const survivorsEl = document.getElementById('scoreSurvivors');
