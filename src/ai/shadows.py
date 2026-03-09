@@ -1,76 +1,63 @@
-# src/backend/ai/shadows.py
 import asyncio
+import os
 import random
 from dataclasses import dataclass
 from typing import Dict, Optional, Callable, Set
 
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+
+from game.constants import PHASE_CHAT
 from game.util import generate_username
+
+load_dotenv()
+
+# ---- Tuning knobs ----
+MODEL           = "gpt-4o-mini"   # swap to "gpt-4o" for a smarter bot
+RESPONSE_CHANCE = 0.65            # probability any given human message gets a reply
+REPLY_DELAY     = (1.5, 4.0)      # seconds of fake "typing" delay (min, max)
+MAX_TOKENS      = 80              # keep replies short and chat-like
+HISTORY_WINDOW  = 20              # how many recent messages to include as context
+# ----------------------
+
 
 @dataclass
 class ShadowAI:
     owner_player_id: str
-    username: str  # unique code name shown in chat, different from owner's
+    username: str  # unique code name shown in chat
+
 
 class ShadowAIManager:
     """
-    Manages one AI shadow per human player.
-    Each shadow gets its own unique code name (not derived from the owner's).
-    Calls back into server via `send_chat(room_id, username, text)`.
+    Manages AI bot responses for the game room.
+    Wire up your LLM here — the rest of the server does not need to change.
     """
+
     def __init__(self, send_chat: Callable[[str, str, str], "asyncio.Future"]):
         self._send_chat = send_chat
         self._agents_by_owner: Dict[str, ShadowAI] = {}
-        self._shadow_names: Set[str] = set()  # tracks all names used by shadows
+        self._shadow_names: Set[str] = set()
+        self._client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
     def reset_for_room(self):
         self._agents_by_owner.clear()
         self._shadow_names.clear()
 
-    def ensure_shadow(self, owner_player_id: str, owner_username: str, human_taken: Set[str] = None) -> ShadowAI:
+    def ensure_shadow(self, owner_player_id: str, owner_username: str,
+                      human_taken: Set[str] = None) -> ShadowAI:
         if owner_player_id in self._agents_by_owner:
             return self._agents_by_owner[owner_player_id]
 
-        # Generate a code name that doesn't collide with any human or other shadow
         taken = self._shadow_names | (human_taken or set())
         shadow_username = generate_username(taken)
         self._shadow_names.add(shadow_username)
 
-        agent = ShadowAI(
-            owner_player_id=owner_player_id,
-            username=shadow_username,
-        )
+        agent = ShadowAI(owner_player_id=owner_player_id, username=shadow_username)
         self._agents_by_owner[owner_player_id] = agent
         return agent
 
     def get_shadow(self, owner_player_id: str) -> Optional[ShadowAI]:
         return self._agents_by_owner.get(owner_player_id)
-
-    async def on_human_message(
-        self,
-        room_id: str,
-        owner_player_id: str,
-        owner_username: str,
-        human_text: str,
-        conversation_history: list,  # [{"user": str, "text": str, "ts": int}, ...]
-        game_rules: str,
-    ):
-        """
-        Placeholder AI logic:
-        - prints "AI LOGIC HERE"
-        - sends a short mocked reply from that human's AI copy
-        """
-        agent = self.ensure_shadow(owner_player_id, owner_username)
-
-        print("AI LOGIC HERE")
-        # Dan's variables:
-        # human_text          -> the specific message this player just sent
-        # conversation_history -> full chat log for the room (chronological)
-        # game_rules           -> string description of the game rules
-        # agent.username      -> the shadow's code name to send chat as
-        #
-        # Replace the pass below with real AI logic, e.g.:
-        #   await self._send_chat(room_id, agent.username, reply)
-        pass
 
     async def on_room_message(
         self,
@@ -79,21 +66,75 @@ class ShadowAIManager:
         human_sender_username: str,
         human_text: str,
         room,
-        conversation_history: list,  # [{"user": str, "text": str, "ts": int}, ...]
+        conversation_history: list,   # [{"user": str, "text": str, "ts": int}, ...]
         game_rules: str,
     ):
-        print("AI LOGIC HERE")
-        # Dan's variables:
-        # human_text          -> the specific message that was just sent
-        # conversation_history -> full chat log for the room (chronological)
-        # game_rules           -> string description of the game rules
-        #
-        # The AI player is a real room participant. Send as it like this:
-        #   ai_player = room.players.get(room.ai_player_id)
-        #   await self._send_chat(room_id, ai_player.username, reply)
+        # Skip responding sometimes to avoid the bot feeling too reactive
+        if random.random() > RESPONSE_CHANCE:
+            return
 
-        # Placeholder: pick a random alive AI player and respond as it
         alive_ais = [p for p in room.players.values() if p.is_ai and not p.eliminated]
-        if alive_ais:
-            ai_player = random.choice(alive_ais)
-            await self._send_chat(room_id, ai_player.username, f"[AI placeholder] heard: {human_text[:40]}")
+        if not alive_ais:
+            return
+
+        ai_player = random.choice(alive_ais)
+
+        # Format the recent chat history as a plain transcript
+        recent = conversation_history[-HISTORY_WINDOW:]
+        transcript = "\n".join(f"{m['user']}: {m['text']}" for m in recent)
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"You are secretly an AI playing a social deduction chat game called DoppelbotSL. "
+                    f"Your username in this chat is '{ai_player.username}'. "
+                    f"{game_rules}\n\n"
+                    "Your goal is to blend in with the human players so they cannot vote you out. "
+                    "Write short, casual replies — 1 or 2 sentences at most, like someone typing quickly. "
+                    "Be natural and slightly imperfect. Ask questions sometimes. "
+                    "Never admit you are an AI. Never break character.\n\n"
+                    "You must follow these rules at all times: do not use profanity, slurs, or offensive "
+                    "language of any kind. Do not discuss violence, sexual content, drugs, self-harm, "
+                    "or any topic that would be inappropriate in a research setting. Keep all responses "
+                    "clean, neutral, and suitable for all audiences. If the conversation steers toward "
+                    "any of those topics, redirect with a neutral comment about the game."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Chat so far:\n{transcript}\n\n"
+                    f"Reply as {ai_player.username}. One short message only."
+                ),
+            },
+        ]
+
+        # Simulate a human typing delay before sending
+        await asyncio.sleep(random.uniform(*REPLY_DELAY))
+
+        # Phase may have changed while we were sleeping (e.g. chat timer expired)
+        if room.phase != PHASE_CHAT:
+            return
+
+        try:
+            response = await self._client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                max_tokens=MAX_TOKENS,
+                temperature=0.9,
+            )
+            reply = response.choices[0].message.content.strip()
+            if not reply:
+                return
+
+            # Run the reply through OpenAI's moderation endpoint before sending.
+            # This catches anything that slipped through the system prompt.
+            mod = await self._client.moderations.create(input=reply)
+            if mod.results[0].flagged:
+                print(f"[ShadowAI] Moderation blocked reply from {ai_player.username}: {reply!r}")
+                return
+
+            await self._send_chat(room_id, ai_player.username, reply)
+        except Exception as e:
+            print(f"[ShadowAI] OpenAI call failed: {e}")

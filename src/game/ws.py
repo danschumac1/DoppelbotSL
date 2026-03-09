@@ -1,4 +1,5 @@
 # src/game/ws.py
+import asyncio
 import json
 import time
 from fastapi import WebSocket, WebSocketDisconnect
@@ -54,11 +55,13 @@ async def ws_room(websocket: WebSocket, room_id: str, player_id: str, *, sink, b
                     await websocket.send_json({"type": "error", "text": "You are eliminated and cannot chat."})
                     continue
 
+                if not text:
+                    continue
+
                 await send_chat_message(room.room_id, player.username, text)
 
-                # shadows persist even if eliminated owners (handled inside on_room_message)
                 history = sink.recent_messages(room.room_id, limit=50)
-                await shadow_ai.on_room_message(
+                asyncio.create_task(shadow_ai.on_room_message(
                     room_id=room.room_id,
                     human_sender_player_id=pid,
                     human_sender_username=player.username,
@@ -66,7 +69,7 @@ async def ws_room(websocket: WebSocket, room_id: str, player_id: str, *, sink, b
                     room=room,
                     conversation_history=history,
                     game_rules=GAME_RULES,
-                )
+                ))
                 continue
 
             if t == "cast_vote":
@@ -81,6 +84,9 @@ async def ws_room(websocket: WebSocket, room_id: str, player_id: str, *, sink, b
                     continue
 
                 target = (data.get("targetPlayerId") or "").strip()
+                if target == pid:
+                    await websocket.send_json({"type": "error", "text": "You cannot vote for yourself."})
+                    continue
                 if target not in room.players or room.players[target].eliminated:
                     await websocket.send_json({"type": "error", "text": "Invalid vote target."})
                     continue

@@ -17,6 +17,32 @@ let isHost = false;
 let chatTimerInterval = null;
 let registrationData = null; // { displayName, participantId, age }
 
+const SESSION_KEY = 'doppelbot_session';
+
+function saveSession() {
+  if (!currentRoom || !currentPlayerId) return;
+  localStorage.setItem(SESSION_KEY, JSON.stringify({
+    roomId: currentRoom,
+    playerId: currentPlayerId,
+    username: currentUsername,
+    isHost,
+    registrationData,
+  }));
+}
+
+function clearSession() {
+  localStorage.removeItem(SESSION_KEY);
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 $('#closeVoteOverlay')?.addEventListener('click', () => {
   if (voteOverlay) voteOverlay.style.display = 'none';
   stopVoteCountdown();
@@ -288,6 +314,8 @@ async function joinRoomFlow(roomId) {
   isHost = !!data.isHost;
   roomSnapshot = data.snapshot || null;
 
+  saveSession();
+
   // UI
   roomLabel.textContent = currentRoom;
   overlay.style.display = 'none';
@@ -520,6 +548,7 @@ $('#disconnect').addEventListener('click',()=>{
   currentRoom=''; roomLabel.textContent='—';
   currentPlayerId=''; currentUsername=''; isHost=false;
   roomSnapshot=null;
+  clearSession();
   overlay.style.display='grid';
   loadRooms();
 });
@@ -720,10 +749,30 @@ function showScoreScreen(data) {
 
 document.getElementById('btnPlayAgain').addEventListener('click', () => {
   document.getElementById('scoreOverlay').style.display = 'none';
+  clearSession();
   overlay.style.display = 'grid';
   loadRooms();
 });
 
-// initial
-showRegistration();
-setStatus(false);
+// On load, check for a saved session and reconnect if one exists
+(function restoreSession() {
+  const s = loadSession();
+  if (!s || !s.roomId || !s.playerId) {
+    showRegistration();
+    setStatus(false);
+    return;
+  }
+
+  // Restore client state from the saved session
+  currentRoom = s.roomId;
+  currentPlayerId = s.playerId;
+  currentUsername = s.username || '';
+  isHost = !!s.isHost;
+  registrationData = s.registrationData || null;
+
+  roomLabel.textContent = currentRoom;
+  showScreen('screenApp');
+  setStatus(false);
+  appendMsg('system', 'System', `Reconnecting to ${currentRoom} as ${currentUsername}...`);
+  connectWebSocket(currentRoom, currentPlayerId);
+})();

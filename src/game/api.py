@@ -41,11 +41,18 @@ def register_api(app, *, get_sink, broadcast, get_shadow_ai):
         if len(room.players) >= MAX_PLAYERS:
             raise HTTPException(400, f"Room full (max {MAX_PLAYERS}).")
 
+        display_name = (payload.get("displayName") or "").strip()[:64]
+        if not display_name:
+            raise HTTPException(400, "Display name is required.")
+
+        # Prevent the same display name from joining the same room twice
+        for p in room.players.values():
+            if not p.is_ai and p.display_name.lower() == display_name.lower():
+                raise HTTPException(400, "A player with that name has already joined this room.")
+
         taken = {p.username for p in room.players.values()}
         username = generate_username(taken)
         player_id = str(uuid.uuid4())
-
-        display_name = (payload.get("displayName") or "").strip()[:64]
         participant_id = (payload.get("participantId") or "").strip()[:64]
         age = max(0, int(payload.get("age") or 0))
 

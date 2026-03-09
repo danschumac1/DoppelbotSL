@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI):
 
     async def send_chat(room_id: str, username: str, text: str):
         ts = int(time.time())
+        room_last_activity[room_id] = time.time()
         app.state.sink.emit_message(room_id, username, text, ts)
         await broadcast(room_id, {
             "type": "chat_message",
